@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0050)file:///Users/yvannuworzen/Downloads/index_36.html -->
+<!-- saved from url=(0050)file:///Users/yvannuworzen/Downloads/index_37.html -->
 <html lang="fr"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
@@ -1518,6 +1518,237 @@ function getFilteredTodos(){
   return out;
 }
 
+// =========================== Dictée vocale (création rapide) ===========================
+// Réutilise le circuit micro + Whisper du module IA. Parse le titre + l'échéance
+// côté client (expressions FR courantes) — pas d'appel Worker supplémentaire.
+var voiceState = { recording:false, recorder:null, chunks:[], busy:false };
+var VOICE_WORKER_URL = 'https://insp-planner-api.yvan-nuworzen.workers.dev';
+
+// --- Parsing de l'échéance depuis le texte dicté ---
+// Renvoie { due:'YYYY-MM-DD'|'', cleanTitle:'...' }
+function parseVoiceTask(raw){
+  var txt = (raw||'').trim();
+  if(!txt) return { due:'', cleanTitle:'' };
+  var lower = txt.toLowerCase();
+  var now = new Date(); now.setHours(0,0,0,0);
+  var due = '';
+  var matchedSpan = null; // [start,end] dans lower, à retirer du titre
+
+  function iso(d){
+    return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
+  }
+  function addDays(n){ var d=new Date(now); d.setDate(d.getDate()+n); return d; }
+
+  // Jours de la semaine (0=dimanche)
+  var jours = {
+    'dimanche':0,'lundi':1,'mardi':2,'mercredi':3,'jeudi':4,'vendredi':5,'samedi':6
+  };
+  var moisNoms = {
+    'janvier':0,'février':1,'fevrier':1,'mars':2,'avril':3,'mai':4,'juin':5,
+    'juillet':6,'août':7,'aout':7,'septembre':8,'octobre':9,'novembre':10,'décembre':11,'decembre':11
+  };
+
+  // 1. "aujourd'hui"
+  var m;
+  if((m = lower.match(/aujourd['’ ]?hui/))){
+    due = iso(now); matchedSpan = [m.index, m.index+m[0].length];
+  }
+  // 2. "après-demain" / "apres demain"
+  else if((m = lower.match(/apr[èe]s[- ]demain/))){
+    due = iso(addDays(2)); matchedSpan = [m.index, m.index+m[0].length];
+  }
+  // 3. "demain"
+  else if((m = lower.match(/\bdemain\b/))){
+    due = iso(addDays(1)); matchedSpan = [m.index, m.index+m[0].length];
+  }
+  // 4. "dans N jours / semaines"
+  else if((m = lower.match(/\bdans\s+(\d+)\s+(jours?|semaines?)\b/))){
+    var n = parseInt(m[1],10) || 0;
+    if(/semaine/.test(m[2])) n *= 7;
+    due = iso(addDays(n)); matchedSpan = [m.index, m.index+m[0].length];
+  }
+  // 5. "lundi prochain" / "le lundi" / "lundi"
+  else if((m = lower.match(/\b(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)(\s+prochain)?\b/))){
+    var target = jours[m[1]];
+    var cur = now.getDay();
+    var delta = (target - cur + 7) % 7;
+    if(delta === 0) delta = 7;            // "lundi" un lundi = lundi suivant
+    if(m[2]) { if(delta <= 0) delta += 7; } // "prochain" force la semaine d'après si déjà passé
+    due = iso(addDays(delta)); matchedSpan = [m.index, m.index+m[0].length];
+  }
+  // 6. "le 20", "le 20 mai", "20 mai"
+  else if((m = lower.match(/\ble\s+(\d{1,2})(\s+(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre))?\b/))
+       || (m = lower.match(/\b(\d{1,2})\s+(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre)\b/))){
+    var dayNum, monIdx;
+    if(m[0].indexOf('le ') === 0 || /^le\s/.test(m[0])){
+      dayNum = parseInt(m[1],10);
+      monIdx = m[3] != null ? moisNoms[m[3]] : now.getMonth();
+    } else {
+      dayNum = parseInt(m[1],10);
+      monIdx = moisNoms[m[2]];
+    }
+    if(dayNum >= 1 && dayNum <= 31 && monIdx != null){
+      var yr = now.getFullYear();
+      var cand = new Date(yr, monIdx, dayNum);
+      if(cand < now) cand = new Date(yr+1, monIdx, dayNum); // date déjà passée → année suivante
+      due = iso(cand); matchedSpan = [m.index, m.index+m[0].length];
+    }
+  }
+  // 7. "fin de semaine" / "ce weekend" → vendredi de cette semaine
+  else if((m = lower.match(/\b(fin de semaine|ce week[- ]?end|week[- ]?end)\b/))){
+    var cur2 = now.getDay();
+    var deltaV = (5 - cur2 + 7) % 7; // vendredi
+    due = iso(addDays(deltaV)); matchedSpan = [m.index, m.index+m[0].length];
+  }
+
+  // Nettoyer le titre : retirer l'expression de date + les mots de liaison résiduels
+  var cleanTitle = txt;
+  if(matchedSpan){
+    cleanTitle = txt.slice(0, matchedSpan[0]) + ' ' + txt.slice(matchedSpan[1]);
+  }
+  // retirer prépositions de date orphelines en fin/début
+  cleanTitle = cleanTitle
+    .replace(/\s+(pour|le|d['’ ]ici|avant|d['’ ]?ici à)\s*$/i, '')
+    .replace(/^\s*(et|puis|alors)\s+/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  // Majuscule initiale
+  if(cleanTitle) cleanTitle = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
+
+  return { due: due, cleanTitle: cleanTitle || txt };
+}
+
+// --- Enregistrement audio (même approche que le module IA) ---
+function voiceStartRecording(onReady){
+  if(voiceState.recording) return;
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    toast('Micro non supporté', 'err'); return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio:true }).then(function(stream){
+    voiceState.chunks = [];
+    var mime = '';
+    if(window.MediaRecorder){
+      var cands = ['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg'];
+      for(var i=0;i<cands.length;i++){
+        if(MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(cands[i])){ mime = cands[i]; break; }
+      }
+    }
+    try{
+      voiceState.recorder = mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
+    }catch(e){
+      toast('Erreur micro','err');
+      stream.getTracks().forEach(function(t){ t.stop(); });
+      return;
+    }
+    voiceState.recorder.ondataavailable = function(e){ if(e.data && e.data.size) voiceState.chunks.push(e.data); };
+    voiceState.recorder.onstop = function(){
+      stream.getTracks().forEach(function(t){ t.stop(); });
+      var blob = new Blob(voiceState.chunks, { type: voiceState.recorder.mimeType || 'audio/mp4' });
+      voiceState.recording = false;
+      if(onReady) onReady(blob);
+    };
+    voiceState.recorder.start();
+    voiceState.recording = true;
+    refresh();
+  }).catch(function(){
+    toast('Accès micro refusé','err');
+  });
+}
+
+function voiceStopRecording(){
+  if(voiceState.recorder && voiceState.recording){
+    try{ voiceState.recorder.stop(); }catch(_){}
+  }
+}
+
+// --- Transcription puis création de la tâche ---
+function voiceTranscribeAndCreate(blob){
+  voiceState.busy = true;
+  refresh();
+  var fd = new FormData();
+  var ext = (blob.type.indexOf('mp4')>=0) ? 'mp4'
+          : (blob.type.indexOf('webm')>=0) ? 'webm'
+          : (blob.type.indexOf('ogg')>=0)  ? 'ogg'
+          : 'm4a';
+  fd.append('file', blob, 'tache.' + ext);
+  fetch(VOICE_WORKER_URL + '/transcribe', { method:'POST', body:fd })
+    .then(function(r){
+      return r.text().then(function(txt){
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        try{ return JSON.parse(txt); }catch(e){ throw new Error('Réponse invalide'); }
+      });
+    })
+    .then(function(j){
+      voiceState.busy = false;
+      var raw = (j && (j.text || j.transcription)) || '';
+      if(!raw){
+        toast('Rien compris, réessaie','err');
+        refresh();
+        return;
+      }
+      var parsed = parseVoiceTask(raw);
+      // Créer la tâche directement, puis ouvrir l'éditeur dessus pour relecture/correction
+      var created = window.INSPK_TODO.add({
+        title: parsed.cleanTitle,
+        description: '',
+        due: parsed.due,
+        recurrence: 'none',
+        subtasks: []
+      });
+      editingId = created.id;
+      creating = false;
+      refresh();
+      if(parsed.due){
+        toast('Tâche créée — échéance détectée','ok');
+      } else {
+        toast('Tâche créée — vérifie l\'échéance','ok');
+      }
+    })
+    .catch(function(err){
+      voiceState.busy = false;
+      refresh();
+      toast('Erreur transcription','err');
+      if(window.console) console.error('[INSPK_VOICE]', err);
+    });
+}
+
+// --- Bouton micro pour le header ---
+function buildVoiceButton(){
+  var label, bg, cls, handler;
+  if(voiceState.busy){
+    label = '⏳ Transcription…';
+    bg = 'var(--bg-card)';
+    cls = '';
+    handler = function(){};
+  } else if(voiceState.recording){
+    label = '⏹ Terminer la dictée';
+    bg = '#ef4444';
+    cls = 'inspk-mic-rec';
+    handler = function(){ voiceStopRecording(); };
+  } else {
+    label = '🎤 Dicter une tâche';
+    bg = 'linear-gradient(135deg, #3b82f6, #2563eb)';
+    cls = '';
+    handler = function(){
+      voiceStartRecording(function(blob){ voiceTranscribeAndCreate(blob); });
+    };
+  }
+  var btn = el('button', {
+    style: {
+      width:'100%', padding:'11px 14px', fontSize:'13px',
+      fontFamily:'inherit', fontWeight:'700', border:'none',
+      borderRadius:'10px', background:bg,
+      color: voiceState.busy ? 'var(--text2)' : '#fff',
+      cursor: voiceState.busy ? 'default' : 'pointer',
+      boxShadow: voiceState.recording ? 'none' : '0 2px 8px rgba(59,130,246,0.3)',
+      marginBottom:'12px', letterSpacing:'0.3px'
+    },
+    onclick: handler
+  }, [label]);
+  if(cls) btn.className = cls;
+  return btn;
+}
+
 function buildHeader(){
   var pendingCount = activeCount();
   var lateCountVal = 0;
@@ -1702,9 +1933,15 @@ function buildHeader(){
         style: {fontSize:'15px', fontWeight:'700', color:'var(--text)', letterSpacing:'0.5px'}
       }, ['📝 À FAIRE']),
       actionBtn
-    ]),
-    el('div', {style: {display:'flex', gap:'6px', flexWrap:'wrap'}}, filterButtons)
+    ])
   ];
+  // Bouton de dictée vocale — masqué en mode sélection et pendant l'édition
+  if(!selectionMode && !creating && !editingId){
+    headerChildren.push(buildVoiceButton());
+  }
+  headerChildren.push(
+    el('div', {style: {display:'flex', gap:'6px', flexWrap:'wrap'}}, filterButtons)
+  );
   if(selectionBar) headerChildren.push(selectionBar);
 
   return el('div', {style:{marginBottom:'14px'}}, headerChildren);
@@ -2353,7 +2590,7 @@ function injectCSS(){
   if(document.getElementById('inspk-todo-css')) return;
   var st = document.createElement('style');
   st.id = 'inspk-todo-css';
-  st.textContent = '@keyframes inspk-blink-pulse{0%,100%{opacity:1}50%{opacity:0.35}}.inspk-blink{animation:inspk-blink-pulse 0.9s ease-in-out infinite}';
+  st.textContent = '@keyframes inspk-blink-pulse{0%,100%{opacity:1}50%{opacity:0.35}}.inspk-blink{animation:inspk-blink-pulse 0.9s ease-in-out infinite}@keyframes inspk-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.5)}50%{box-shadow:0 0 0 8px rgba(239,68,68,0)}}.inspk-mic-rec{animation:inspk-mic-pulse 1.1s ease-out infinite}';
   if(document.head) document.head.appendChild(st);
   else if(document.body) document.body.appendChild(st);
 }

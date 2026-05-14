@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0050)file:///Users/yvannuworzen/Downloads/index_27.html -->
+<!-- saved from url=(0050)file:///Users/yvannuworzen/Downloads/index_28.html -->
 <html lang="fr"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
@@ -2150,6 +2150,8 @@ function refresh(){
   }
   
   try{ updateBadge(); }catch(_){}
+  try{ updateHomeBanner(); }catch(_){}
+  try{ updateAppBadge(); }catch(_){}
 }
 
 // =========================== Badge sur l'onglet ===========================
@@ -2232,6 +2234,120 @@ function updateBadge(){
   }catch(e){}
 }
 
+// =========================== Banniere ACCUEIL Q1 ===========================
+// Scanne les rapports Q1 non termines et renvoie l'etat agrege pour la banniere
+function q1BannerState(){
+  var now = new Date();
+  var retard = 0, afaire = 0;
+  for(var i=0;i<todos.length;i++){
+    var t = todos[i];
+    if(!t || t.done) continue;
+    if(t.kind !== 'q1report') continue;
+    var st = q1ReportState(t, now);
+    if(!st || !st.color) continue;
+    if(st.color === '#ef4444'){ retard++; }
+    else if(st.color === '#f59e0b' || (st.color === '#3b82f6' && st.urgent)){ afaire++; }
+  }
+  if(retard === 0 && afaire === 0) return {show:false};
+  var level = retard > 0 ? 'retard' : 'afaire';
+  var msg;
+  if(retard > 0){
+    msg = retard + ' rapport' + (retard>1?'s':'') + ' Q1 en retard';
+    if(afaire > 0) msg += ' \u00B7 ' + afaire + ' \u00E0 traiter';
+  } else {
+    msg = afaire + ' rapport' + (afaire>1?'s':'') + ' Q1 \u00E0 transmettre';
+  }
+  return {show:true, level:level, retard:retard, afaire:afaire, msg:msg};
+}
+
+// Repere le bloc d'en-tete "Tableau de bord" du tab ACCUEIL
+function findHomeHeader(){
+  try{
+    var divs = document.querySelectorAll('.tab-content-enter div');
+    for(var i=0;i<divs.length;i++){
+      var d = divs[i];
+      if(d.childNodes.length === 1 && d.firstChild && d.firstChild.nodeType === 3
+         && d.firstChild.textContent.trim() === 'Tableau de bord'){
+        return d.parentNode;
+      }
+    }
+  }catch(_){}
+  return null;
+}
+
+// Injecte / met a jour / retire la banniere de rappel Q1 sur le tableau de bord
+function updateHomeBanner(){
+  try{
+    var header = findHomeHeader();
+    var existing = document.getElementById('inspk-q1-banner');
+    if(!header){
+      if(existing) existing.remove();
+      return;
+    }
+    var state = q1BannerState();
+    if(!state.show){
+      if(existing) existing.remove();
+      return;
+    }
+    var isRetard = state.level === 'retard';
+    var sig = state.level + '|' + state.msg;
+    if(existing && existing._inspkSig === sig) return;
+    if(existing) existing.remove();
+
+    var banner = document.createElement('div');
+    banner.id = 'inspk-q1-banner';
+    banner._inspkSig = sig;
+    banner.setAttribute('role','button');
+    banner.className = isRetard ? 'inspk-blink' : '';
+    var col = isRetard ? '#ef4444' : '#f59e0b';
+    var bg  = isRetard ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)';
+    var bd  = isRetard ? 'rgba(239,68,68,0.45)' : 'rgba(245,158,11,0.45)';
+    banner.style.cssText = [
+      'display:flex','align-items:center','gap:9px',
+      'margin:0 2px 14px','padding:9px 11px',
+      'background:'+bg,'border:1px solid '+bd,
+      'border-left:3px solid '+col,'border-radius:8px',
+      'cursor:pointer','-webkit-tap-highlight-color:transparent'
+    ].join(';');
+
+    var icon = document.createElement('span');
+    icon.textContent = isRetard ? '\u26A0\uFE0F' : '\uD83D\uDD14';
+    icon.style.cssText = 'font-size:15px;flex-shrink:0;line-height:1;';
+
+    var txt = document.createElement('span');
+    txt.textContent = state.msg;
+    txt.style.cssText = 'flex:1;font-size:12px;font-weight:600;color:'+col+';line-height:1.3;';
+
+    var chev = document.createElement('span');
+    chev.textContent = 'Voir \u203A';
+    chev.style.cssText = 'font-size:11px;font-weight:700;color:'+col+';opacity:0.8;flex-shrink:0;';
+
+    banner.appendChild(icon);
+    banner.appendChild(txt);
+    banner.appendChild(chev);
+    banner.addEventListener('click', function(){
+      try{ var b = findTodoBtn(); if(b) b.click(); }catch(_){}
+    });
+
+    header.parentNode.insertBefore(banner, header.nextSibling);
+  }catch(_){}
+}
+
+// =========================== Badge sur l'icone (PWA) ===========================
+// API Badging : fonctionne sur PWA installee (iOS 16.4+ via ecran d'accueil,
+// Chrome/Edge desktop). Ignore silencieusement si non supporte.
+function updateAppBadge(){
+  try{
+    if(!('setAppBadge' in navigator)) return;
+    var count = activeCount();
+    if(count > 0){
+      navigator.setAppBadge(count).catch(function(){});
+    } else {
+      navigator.clearAppBadge().catch(function(){});
+    }
+  }catch(_){}
+}
+
 // =========================== CSS injection ===========================
 function injectCSS(){
   if(document.getElementById('inspk-todo-css')) return;
@@ -2256,6 +2372,8 @@ function maybeRender(){
     } else {
       updateBadge();
     }
+    updateHomeBanner();
+    updateAppBadge();
   }catch(e){}
 }
 
@@ -2273,6 +2391,8 @@ function startPolling(){
         todos = loadTodos();
         if(document.getElementById('insp-todo-root')){ refresh(); }
         else { updateBadge(); }
+        updateHomeBanner();
+        updateAppBadge();
       }catch(_){}
     });
   }catch(_){}
@@ -2287,6 +2407,11 @@ function startPolling(){
     try{ ensureTimesheets(); }catch(_){}
     try{ ensureQ1Items(); }catch(_){}
   }, 300000);
+  
+  // Rafraîchissement rapide de la bannière ACCUEIL (DOM léger)
+  setInterval(function(){
+    try{ updateHomeBanner(); }catch(_){}
+  }, 600);
   
   // Premier check
   maybeRender();

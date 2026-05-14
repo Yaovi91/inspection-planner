@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0050)file:///Users/yvannuworzen/Downloads/index_37.html -->
+<!-- saved from url=(0050)file:///Users/yvannuworzen/Downloads/index_38.html -->
 <html lang="fr"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
@@ -1749,6 +1749,84 @@ function buildVoiceButton(){
   return btn;
 }
 
+// --- Collage de texte → analyse → création de tâche ---
+// Le texte collé n'est jamais stocké : il sert uniquement à produire la note.
+function voiceCreateFromText(raw){
+  var txt = (raw||'').trim();
+  if(!txt){
+    toast('Presse-papier vide','err');
+    return;
+  }
+  // Si le texte est long (mail, SMS...), on garde une 1re ligne courte comme titre
+  // et le reste en description — mais on parse l'échéance sur l'ensemble.
+  var parsed = parseVoiceTask(txt);
+  var title = parsed.cleanTitle;
+  var description = '';
+  // Texte multi-lignes ou très long → titre = début, description = tout le texte source
+  var isLong = txt.length > 90 || txt.indexOf('\n') >= 0;
+  if(isLong){
+    // titre = première ligne non vide, tronquée
+    var firstLine = txt.split(/\r?\n/).find(function(l){ return l.trim().length > 0; }) || txt;
+    firstLine = firstLine.trim();
+    if(firstLine.length > 80) firstLine = firstLine.slice(0,77) + '…';
+    title = firstLine.charAt(0).toUpperCase() + firstLine.slice(1);
+    description = txt;
+  }
+  var created = window.INSPK_TODO.add({
+    title: title,
+    description: description,
+    due: parsed.due,
+    recurrence: 'none',
+    subtasks: []
+  });
+  editingId = created.id;
+  creating = false;
+  refresh();
+  if(parsed.due){
+    toast('Tâche créée — échéance détectée','ok');
+  } else {
+    toast('Tâche créée — vérifie l\'échéance','ok');
+  }
+}
+
+function buildPasteButton(){
+  var btn = el('button', {
+    style: {
+      width:'100%', padding:'11px 14px', fontSize:'13px',
+      fontFamily:'inherit', fontWeight:'700', border:'1px solid var(--border2)',
+      borderRadius:'10px', background:'var(--bg-card)',
+      color:'var(--text)', cursor:'pointer',
+      marginBottom:'12px', letterSpacing:'0.3px'
+    },
+    onclick: function(){
+      // 1re tentative : lecture directe du presse-papier (iOS la supporte)
+      if(navigator.clipboard && navigator.clipboard.readText){
+        navigator.clipboard.readText().then(function(text){
+          if(text && text.trim()){
+            voiceCreateFromText(text);
+          } else {
+            voicePastePrompt();
+          }
+        }).catch(function(){
+          voicePastePrompt();
+        });
+      } else {
+        voicePastePrompt();
+      }
+    }
+  }, ['📋 Coller un texte']);
+  return btn;
+}
+
+// Repli : si la lecture auto du presse-papier échoue (permission refusée),
+// on demande à l'utilisateur de coller manuellement.
+function voicePastePrompt(){
+  var text = window.prompt('Colle ton texte ici (mail, SMS, note…) :', '');
+  if(text != null && text.trim()){
+    voiceCreateFromText(text);
+  }
+}
+
 function buildHeader(){
   var pendingCount = activeCount();
   var lateCountVal = 0;
@@ -1935,9 +2013,21 @@ function buildHeader(){
       actionBtn
     ])
   ];
-  // Bouton de dictée vocale — masqué en mode sélection et pendant l'édition
+  // Boutons de création rapide (dictée + collage) — masqués en mode sélection et pendant l'édition
   if(!selectionMode && !creating && !editingId){
-    headerChildren.push(buildVoiceButton());
+    var voiceBtn = buildVoiceButton();
+    var pasteBtn = buildPasteButton();
+    // Retirer les marges basses individuelles, la rangée gère l'espacement
+    voiceBtn.style.marginBottom = '0';
+    pasteBtn.style.marginBottom = '0';
+    headerChildren.push(
+      el('div', {
+        style: {display:'flex', gap:'8px', marginBottom:'12px'}
+      }, [
+        el('div', {style:{flex:'1'}}, [voiceBtn]),
+        el('div', {style:{flex:'1'}}, [pasteBtn])
+      ])
+    );
   }
   headerChildren.push(
     el('div', {style: {display:'flex', gap:'6px', flexWrap:'wrap'}}, filterButtons)

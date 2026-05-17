@@ -4121,4 +4121,285 @@ if(document.readyState === 'loading'){
 })();
 </script>
 
-<button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button><button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button></body></html>
+<button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button><button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button>
+<!-- THEME-PANEL-START -->
+<script>
+(function () {
+  'use strict';
+
+  const CONFIG = {
+    tabs: [
+      { id: 'reformulation',    label: 'Reformulation' },
+      { id: 'reponse-mail',     label: 'Réponse mail' },
+      { id: 'chiffrement',      label: 'Chiffrement cloud' },
+      { id: 'qgate',            label: 'Q-Gate' },
+      { id: 'tableau-partage',  label: 'Tableau Partagé' }
+    ],
+    cardSelector:         '.card',
+    planningCardSelector: '.planning-card',
+    detectActiveTab: function () {
+      const el = document.querySelector(
+        '[data-tab].active, ' +
+        '.tab.active, ' +
+        '[role="tab"][aria-selected="true"], ' +
+        '.tab-pane.active, ' +
+        '[data-tab-content].active'
+      );
+      if (!el) return null;
+      return el.dataset.tab || el.dataset.tabContent || el.id || null;
+    }
+  };
+
+  const SLIDERS = [
+    { key: 'brightness', label: 'Luminosité',              min:  50, max: 150, def: 100, unit: '%' },
+    { key: 'hue',        label: 'Teinte',                  min: -180, max: 180, def:   0, unit: '°' },
+    { key: 'saturation', label: 'Saturation',              min:   0, max: 200, def: 100, unit: '%' },
+    { key: 'contrast',   label: 'Contraste cartes/fond',   min:  50, max: 150, def: 100, unit: '%' },
+    { key: 'borderSat',  label: 'Saturation bordures',     min:   0, max: 200, def: 100, unit: '%' },
+    { key: 'planningOp', label: 'Opacité cartes planning', min:  30, max: 100, def: 100, unit: '%' }
+  ];
+
+  const STORAGE_KEY = 'theme_per_tab_v1';
+  const defaults = () => SLIDERS.reduce((a, s) => { a[s.key] = s.def; return a; }, {});
+
+  function loadAll() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function saveAll(obj) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); } catch (e) {}
+  }
+  function getTab(id) {
+    return Object.assign(defaults(), loadAll()[id] || {});
+  }
+  function setTab(id, vals) {
+    const all = loadAll();
+    all[id] = vals;
+    saveAll(all);
+  }
+
+  function applyTheme(tabId) {
+    const v = getTab(tabId);
+    const styleId = 'theme-applied-' + tabId;
+    let s = document.getElementById(styleId);
+    if (!s) {
+      s = document.createElement('style');
+      s.id = styleId;
+      document.head.appendChild(s);
+    }
+    const scope = `[data-tab-content="${tabId}"], .tab-pane#${tabId}, body[data-active-tab="${tabId}"]`;
+    s.textContent = `
+      ${scope} {
+        filter: brightness(${v.brightness}%) hue-rotate(${v.hue}deg) saturate(${v.saturation}%);
+      }
+      ${scope} ${CONFIG.cardSelector} {
+        filter: contrast(${v.contrast}%) saturate(${v.borderSat}%);
+      }
+      ${scope} ${CONFIG.planningCardSelector} {
+        opacity: ${v.planningOp / 100};
+      }
+    `;
+  }
+  function applyAll() { CONFIG.tabs.forEach(t => applyTheme(t.id)); }
+
+  function injectPanelStyles() {
+    if (document.getElementById('theme-panel-styles')) return;
+    const css = document.createElement('style');
+    css.id = 'theme-panel-styles';
+    css.textContent = `
+      #theme-fab{
+        position:fixed; right:18px; bottom:18px; z-index:99998;
+        width:48px; height:48px; border-radius:50%; border:0;
+        background:#2563eb; color:#fff; font-size:22px; cursor:pointer;
+        box-shadow:0 4px 14px rgba(0,0,0,.25);
+        transition:transform .15s ease, background .15s ease;
+      }
+      #theme-fab:hover{ background:#1d4ed8; transform:scale(1.05); }
+      #theme-panel{
+        position:fixed; right:18px; bottom:78px; z-index:99999;
+        width:340px; max-width:calc(100vw - 36px);
+        max-height:calc(100vh - 110px); overflow-y:auto;
+        background:#ffffff; color:#111827;
+        border-radius:14px; padding:18px 18px 16px;
+        box-shadow:0 12px 36px rgba(0,0,0,.28);
+        font:14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        display:none;
+      }
+      #theme-panel.open{ display:block; }
+      #theme-panel h3{
+        margin:0 0 12px; font-size:15px; font-weight:600;
+        letter-spacing:.01em;
+      }
+      #theme-panel .close{
+        position:absolute; top:10px; right:12px;
+        background:none; border:0; font-size:22px; line-height:1;
+        cursor:pointer; color:#6b7280; padding:0;
+      }
+      #theme-panel .close:hover{ color:#111827; }
+      #theme-panel label.lbl{
+        display:block; margin:10px 0 4px;
+        font-size:12px; font-weight:500; color:#374151;
+      }
+      #theme-panel select{
+        width:100%; padding:7px 9px; margin-bottom:6px;
+        border:1px solid #d1d5db; border-radius:7px;
+        background:#fff; color:inherit; font:inherit;
+      }
+      #theme-panel .row{ display:flex; align-items:center; gap:10px; }
+      #theme-panel input[type=range]{ flex:1; min-width:0; }
+      #theme-panel .val{
+        min-width:48px; text-align:right;
+        font-variant-numeric:tabular-nums; color:#6b7280;
+        font-size:12px;
+      }
+      #theme-panel .btns{
+        display:flex; gap:8px; margin-top:16px;
+        padding-top:14px; border-top:1px solid #e5e7eb;
+      }
+      #theme-panel button.act{
+        flex:1; padding:9px 10px; border:1px solid #d1d5db;
+        border-radius:7px; background:#f9fafb; color:#111827;
+        cursor:pointer; font:500 13px system-ui, sans-serif;
+      }
+      #theme-panel button.act:hover{ background:#f3f4f6; }
+      #theme-panel button.act.primary{
+        background:#2563eb; color:#fff; border-color:#2563eb;
+      }
+      #theme-panel button.act.primary:hover{ background:#1d4ed8; }
+      @media (prefers-color-scheme: dark){
+        #theme-panel{ background:#1f2937; color:#f9fafb; }
+        #theme-panel label.lbl{ color:#d1d5db; }
+        #theme-panel select{ background:#374151; color:#f9fafb; border-color:#4b5563; }
+        #theme-panel .val{ color:#9ca3af; }
+        #theme-panel .btns{ border-top-color:#374151; }
+        #theme-panel button.act{ background:#374151; color:#f9fafb; border-color:#4b5563; }
+        #theme-panel button.act:hover{ background:#4b5563; }
+        #theme-panel .close{ color:#9ca3af; }
+        #theme-panel .close:hover{ color:#f9fafb; }
+      }
+    `;
+    document.head.appendChild(css);
+  }
+
+  function buildPanel() {
+    injectPanelStyles();
+
+    const fab = document.createElement('button');
+    fab.id = 'theme-fab';
+    fab.type = 'button';
+    fab.title = 'Personnaliser le thème';
+    fab.textContent = '🎨';
+    document.body.appendChild(fab);
+
+    const panel = document.createElement('div');
+    panel.id = 'theme-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', 'Personnaliser le thème');
+    panel.innerHTML = `
+      <button class="close" type="button" aria-label="Fermer">×</button>
+      <h3>Personnaliser le thème</h3>
+      <label class="lbl" for="theme-tab-select">Onglet</label>
+      <select id="theme-tab-select">
+        ${CONFIG.tabs.map(t => `<option value="${t.id}">${t.label}</option>`).join('')}
+      </select>
+      <div id="theme-sliders"></div>
+      <div class="btns">
+        <button class="act"         id="theme-reset"     type="button">Réinitialiser cet onglet</button>
+        <button class="act primary" id="theme-paste-all" type="button">Coller à tous</button>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    const slidersWrap = panel.querySelector('#theme-sliders');
+    SLIDERS.forEach(s => {
+      const row = document.createElement('div');
+      row.innerHTML = `
+        <label class="lbl">${s.label}</label>
+        <div class="row">
+          <input type="range" min="${s.min}" max="${s.max}" step="1" data-key="${s.key}">
+          <span class="val" data-val="${s.key}"></span>
+        </div>
+      `;
+      slidersWrap.appendChild(row);
+    });
+
+    let currentTab = CONFIG.tabs[0].id;
+
+    function renderSliders() {
+      const v = getTab(currentTab);
+      SLIDERS.forEach(s => {
+        slidersWrap.querySelector(`input[data-key="${s.key}"]`).value = v[s.key];
+        slidersWrap.querySelector(`span[data-val="${s.key}"]`).textContent = v[s.key] + s.unit;
+      });
+    }
+
+    slidersWrap.addEventListener('input', e => {
+      const key = e.target.dataset.key;
+      if (!key) return;
+      const v = getTab(currentTab);
+      v[key] = parseFloat(e.target.value);
+      setTab(currentTab, v);
+      const s = SLIDERS.find(x => x.key === key);
+      slidersWrap.querySelector(`span[data-val="${key}"]`).textContent = v[key] + s.unit;
+      applyTheme(currentTab);
+    });
+
+    const sel = panel.querySelector('#theme-tab-select');
+    sel.addEventListener('change', () => {
+      currentTab = sel.value;
+      renderSliders();
+    });
+
+    panel.querySelector('#theme-reset').addEventListener('click', () => {
+      setTab(currentTab, defaults());
+      applyTheme(currentTab);
+      renderSliders();
+    });
+
+    panel.querySelector('#theme-paste-all').addEventListener('click', () => {
+      if (!confirm('Appliquer les réglages actuels à tous les onglets ?')) return;
+      const v = getTab(currentTab);
+      CONFIG.tabs.forEach(t => {
+        setTab(t.id, Object.assign({}, v));
+        applyTheme(t.id);
+      });
+    });
+
+    panel.querySelector('.close').addEventListener('click', () => panel.classList.remove('open'));
+
+    fab.addEventListener('click', () => {
+      if (!panel.classList.contains('open')) {
+        const active = CONFIG.detectActiveTab();
+        const found = CONFIG.tabs.find(t => t.id === active);
+        currentTab = found ? found.id : CONFIG.tabs[0].id;
+        sel.value = currentTab;
+        renderSliders();
+      }
+      panel.classList.toggle('open');
+    });
+
+    document.addEventListener('click', e => {
+      if (!panel.classList.contains('open')) return;
+      if (panel.contains(e.target) || fab.contains(e.target)) return;
+      panel.classList.remove('open');
+    });
+  }
+
+  function init() {
+    buildPanel();
+    applyAll();
+    window.themeAPI = {
+      open:          () => document.getElementById('theme-fab').click(),
+      setActiveTab:  (id) => { document.body.dataset.activeTab = id; },
+      reapplyAll:    applyAll
+    };
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+<!-- THEME-PANEL-END --></body></html>

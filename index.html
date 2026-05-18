@@ -4057,10 +4057,18 @@ if(document.readyState === 'loading'){
         btn.appendChild(chk);
       }
 
-      btn.addEventListener('click', function(){
+            var triggered = false;
+      var trigger = function(e){
+        if(triggered) return;
+        triggered = true;
+        if(e){ e.preventDefault(); e.stopPropagation(); }
         closeStatusMenu();
         try{ if(typeof cb === 'function') cb(sd.key); }catch(_){}
-      });
+      };
+      btn.addEventListener('touchend', trigger, {passive:false});
+      btn.addEventListener('click', trigger);
+      btn.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
 
       panel.appendChild(btn);
     });

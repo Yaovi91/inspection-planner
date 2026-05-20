@@ -4124,4 +4124,732 @@ if(document.readyState === 'loading'){
 })();
 </script>
 
-<button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button><button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button></body></html>
+<button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button><button id="inspk-nav-back" aria-label="Retour à l’écran précédent" style="position: fixed; top: max(10px, env(safe-area-inset-top, 0px)); left: 10px; z-index: 9000; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border2); background: var(--bg-card); color: var(--text); font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; display: none; align-items: center; justify-content: center; padding: 0px; box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 10px; font-family: inherit; -webkit-tap-highlight-color: transparent; transition: transform 0.1s, opacity 0.15s;">‹</button>
+<script>
+/* =====================================================================
+   INSP PLANNER — Module Multi-visite
+   ---------------------------------------------------------------------
+   Planifie les N visites annuelles d'un site (V1..Vn) :
+   - Prévisionnel théorique au mois (équiréparti à partir de contractStart)
+   - Recalage glissant après chaque visite faite (date réelle saisie)
+   - Mini-frise compacte sur la carte PRIORITES
+   - Section "VISITES PRÉVISIONNELLES" injectée dans la fiche modale
+   - Rappels automatiques dans À FAIRE : J-28 (orange) et J-7 (rouge)
+   - Référence = 15 du mois prévisionnel (tant qu'aucun jour précis n'est posé)
+
+   Lecture seule sur les sites — aucune modification de ispk-all.
+   Les overrides "jour précis posé par l'utilisateur" sont stockés dans
+   notre propre clé : ispk-multivisit-overrides-v1
+   ===================================================================== */
+(function(){
+  'use strict';
+  if (window.INSPK_MULTIVISIT) return;
+  window.INSPK_MULTIVISIT = true;
+
+  // =========================== Constantes ===========================
+  var LS_OVERRIDES = 'ispk-multivisit-overrides-v1';
+  var TODOS_KEY = 'ispk-todos';
+  var ALL_KEY = 'ispk-all';
+  var POLL_MS = 2500;             // intervalle de re-rendu DOM (cartes/fiche)
+  var TODO_REFRESH_MS = 60*60*1000; // 1h — refresh items À FAIRE
+  var REMIND_EARLY_DAYS = 28;
+  var REMIND_LATE_DAYS = 7;
+  var REF_DAY_OF_MONTH = 15;
+  var DEFAULT_VPY = { SPK_Q1:3, SPK_DT:3, SPK_TRIM:4, SPK_DT_VA:4 };
+
+  // =========================== Helpers ===========================
+  function pad2(n){ return n<10?'0'+n:''+n; }
+  function isoDay(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function parseISO(s){
+    if(!s) return null;
+    var d = new Date((typeof s==='string'?s:'')+'T12:00:00');
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function startOfDay(d){ var x=new Date(d); x.setHours(0,0,0,0); return x; }
+  function addMonths(date, n){
+    var d = new Date(date);
+    d.setMonth(d.getMonth()+n);
+    return d;
+  }
+  function monthLabel(d){
+    var MOIS = ['janv.','févr.','mars','avril','mai','juin','juil.','août','sept.','oct.','nov.','déc.'];
+    return MOIS[d.getMonth()]+' '+String(d.getFullYear()).slice(2);
+  }
+  function dayLabel(d){
+    return pad2(d.getDate())+'/'+pad2(d.getMonth()+1);
+  }
+  function getDefVpy(type){
+    return DEFAULT_VPY[type] || 1;
+  }
+  function getVisitDate(v){
+    return typeof v==='string' ? v : (v && v.date) || '';
+  }
+
+  // =========================== Stockage overrides ===========================
+  function loadOverrides(){
+    try{
+      var raw = localStorage.getItem(LS_OVERRIDES);
+      if(!raw) return {};
+      var o = JSON.parse(raw);
+      return (o && typeof o==='object') ? o : {};
+    }catch(e){ return {}; }
+  }
+  function saveOverrides(o){
+    try{ localStorage.setItem(LS_OVERRIDES, JSON.stringify(o||{})); }catch(e){}
+  }
+  function getOverride(siteId, n){
+    var o = loadOverrides();
+    return (o[siteId] && o[siteId]['V'+n]) || null; // string ISO ou null
+  }
+  function setOverride(siteId, n, isoDate){
+    var o = loadOverrides();
+    if(!o[siteId]) o[siteId] = {};
+    if(isoDate){ o[siteId]['V'+n] = isoDate; }
+    else { delete o[siteId]['V'+n]; }
+    if(Object.keys(o[siteId]).length===0) delete o[siteId];
+    saveOverrides(o);
+  }
+
+  // =========================== Sites (lecture) ===========================
+  function loadSites(){
+    try{
+      var raw = localStorage.getItem(ALL_KEY);
+      if(!raw) return [];
+      var o = JSON.parse(raw);
+      return (o && Array.isArray(o.s)) ? o.s : [];
+    }catch(e){ return []; }
+  }
+  function findSite(id){
+    var sites = loadSites();
+    for(var i=0;i<sites.length;i++){ if(sites[i].id===id) return sites[i]; }
+    return null;
+  }
+
+  // =========================== Moteur de calcul ===========================
+  /**
+   * Calcule la planification prévisionnelle V1..Vn d'un site.
+   * Retourne null si le site n'est pas éligible (pas de date début, vpy<2, terminé/transféré).
+   * Sinon : { vpy, visits: [{ n, done, doneDate, skipped, plannedDay, expectedMonth, status }] }
+   *   - done : true si visite réalisée
+   *   - skipped : true si dans skippedVisits
+   *   - plannedDay : date ISO si l'utilisateur a posé un jour précis (planned, extraPlanned, ou override)
+   *   - expectedMonth : Date (1er du mois) théorique
+   *   - status : 'done' | 'skipped' | 'late' | 'soon' | 'future' | 'confirmed'
+   */
+  function computePlan(site){
+    if(!site) return null;
+    if(site.contractComplete || site.transferredTo) return null;
+    if(!site.contractStart) return null;
+
+    var vpy = site.visitsPerYear || getDefVpy(site.type);
+    if(!vpy || vpy < 2) return null;
+
+    var startD = parseISO(site.contractStart);
+    if(!startD) return null;
+
+    var skipped = (site.skippedVisits || []).slice();
+    var visitsDates = (site.visits || []).map(getVisitDate).filter(Boolean).sort(); // ancien→récent
+    var monthInterval = 12/vpy; // ex: vpy=2 → 6 mois ; vpy=4 → 3 mois
+
+    var today = startOfDay(new Date());
+    var planned = site.planned || null;
+    var extras = (site.extraPlanned||[])
+      .map(function(e){ return typeof e==='object' ? (e.date||null) : e; })
+      .filter(Boolean);
+    var extrasConfirmed = (site.extraPlanned||[])
+      .filter(function(e){ return e && typeof e==='object' && e.clientStatus==='confirmed'; })
+      .map(function(e){ return e.date; });
+    var mainConfirmed = (site.clientStatus==='confirmed' && planned) ? planned : null;
+    var overrides = loadOverrides()[site.id] || {};
+
+    // Visites réalisées : associer chaque visite passée à un numéro
+    // On considère que les visites présentes dans `visits[]` correspondent aux V1..V(visits.length+skipped)
+    // dans l'ordre chronologique (les skipped ne comptent pas dans visits[]).
+    var doneCount = visitsDates.length;
+    var totalDealtWith = doneCount + skipped.length;
+
+    var arr = [];
+    // Pour le recalage glissant : on part du contractStart, mais après chaque visite réalisée,
+    // les Vn+ sont recalées à partir de la date réelle.
+    var lastRefDate = startD;       // référence courante
+    var visitsConsumed = 0;          // index dans visitsDates[]
+
+    for(var n=1; n<=vpy; n++){
+      var isSkipped = skipped.indexOf(n) >= 0;
+      var info = { n: n, done:false, doneDate:null, skipped:isSkipped, plannedDay:null, expectedMonth:null, status:'future' };
+
+      if(isSkipped){
+        info.status = 'skipped';
+        // pas d'avancement de lastRefDate pour les sautées (on considère que skipped ne décale pas)
+        // On avance malgré tout le compteur "théorique"
+        lastRefDate = addMonths(lastRefDate, monthInterval);
+        arr.push(info);
+        continue;
+      }
+
+      // Visite réalisée ?
+      if(visitsConsumed < doneCount){
+        // On consomme dans l'ordre, mais visitsDates est trié ancien→récent — l'index 0 est la plus ancienne.
+        // Toutefois `visits[]` dans le store est récent→ancien (la première est la plus récente).
+        // On l'a re-trié en ordre ancien→récent juste au-dessus.
+        var dDone = visitsDates[visitsConsumed];
+        info.done = true;
+        info.doneDate = dDone;
+        info.status = 'done';
+        visitsConsumed++;
+        // Recaler lastRefDate sur cette date réelle
+        var dd = parseISO(dDone);
+        if(dd) lastRefDate = dd;
+        arr.push(info);
+        continue;
+      }
+
+      // Visite future : mois prévisionnel = lastRef + monthInterval (cumulé sur les futures)
+      // Pour la 1ʳᵉ future après recalage : +monthInterval depuis lastRefDate.
+      // Pour les suivantes : +monthInterval supplémentaires.
+      var futureIdx = n - (visitsConsumed + skipped.filter(function(k){ return k<n; }).length);
+      // En pratique : le nombre de visites futures consommées dans cette boucle
+      // = (n - 1) - (déjà placées comme done/skipped jusqu'à n-1)
+      // Plus simple : avancer lastRefDate au cumul "future"
+      // On va plutôt accumuler progressivement via une variable dédiée :
+      info.expectedMonth = addMonths(lastRefDate, monthInterval);
+      // Préparer pour la prochaine future
+      lastRefDate = info.expectedMonth;
+
+      // Jour précis ? Priorités : override > main planned (si pertinent) > extra
+      var dayIso = null;
+      if(overrides['V'+n]) dayIso = overrides['V'+n];
+      // Sinon, si c'est la prochaine visite due et que `planned` existe, on l'associe à elle
+      else if(visitsConsumed === doneCount && planned){
+        // Vérifier que la planned tombe dans une fenêtre cohérente avec expectedMonth (±2 mois)
+        var pd = parseISO(planned);
+        if(pd){
+          var diff = Math.abs((pd - info.expectedMonth) / (1000*60*60*24));
+          if(diff < 75) dayIso = planned;
+        }
+      }
+      // Extras : on essaie d'attribuer une extra à une visite future si la date colle
+      if(!dayIso && extras.length){
+        for(var k=0;k<extras.length;k++){
+          var ed = parseISO(extras[k]);
+          if(!ed) continue;
+          var dd2 = Math.abs((ed - info.expectedMonth) / (1000*60*60*24));
+          if(dd2 < 60){ dayIso = extras[k]; break; }
+        }
+      }
+      info.plannedDay = dayIso;
+
+      // Statut : confirmed / late / soon / future
+      var refDay = dayIso ? parseISO(dayIso) : new Date(info.expectedMonth.getFullYear(), info.expectedMonth.getMonth(), REF_DAY_OF_MONTH);
+      if(!refDay){ refDay = info.expectedMonth; }
+      var daysToRef = Math.round((startOfDay(refDay) - today) / (1000*60*60*24));
+
+      var isConfirmed = !!(dayIso && (extrasConfirmed.indexOf(dayIso)>=0 || dayIso===mainConfirmed));
+      if(isConfirmed){ info.status = 'confirmed'; }
+      else if(daysToRef < -3){ info.status = 'late'; }   // retard sérieux : +3j après la référence
+      else if(daysToRef <= REMIND_LATE_DAYS){ info.status = 'urgent'; }   // ≤ 7j
+      else if(daysToRef <= REMIND_EARLY_DAYS){ info.status = 'soon'; }    // ≤ 28j
+      else { info.status = 'future'; }
+
+      arr.push(info);
+    }
+
+    return { vpy: vpy, visits: arr };
+  }
+
+  // =========================== Styles inline ===========================
+  function injectCss(){
+    if(document.getElementById('inspk-mv-css')) return;
+    var s = document.createElement('style');
+    s.id = 'inspk-mv-css';
+    s.textContent = [
+      '.ispk-mv-frieze{display:flex;align-items:center;gap:0;margin:6px 0 2px;flex-wrap:wrap;}',
+      '.ispk-mv-vpill{display:inline-flex;flex-direction:column;align-items:center;min-width:46px;padding:1px 4px;}',
+      '.ispk-mv-vdot{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;font-family:var(--font-mono);border:2px solid transparent;line-height:1;color:#fff;}',
+      '.ispk-mv-vlabel{font-size:8px;color:var(--text3);margin-top:1px;letter-spacing:.2px;text-align:center;line-height:1.1;font-weight:600;}',
+      '.ispk-mv-vsep{height:2px;flex:0 0 14px;background:var(--border);align-self:center;margin-top:-12px;}',
+      '.ispk-mv-vsep.done{background:#22c55e;}',
+      '.ispk-mv-section{background:var(--bg-base);border-radius:14px;padding:12px;margin-bottom:10px;border-left:3px solid #a78bfa;}',
+      '.ispk-mv-sec-title{color:#a78bfa;font-size:10px;letter-spacing:1px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;}',
+      '.ispk-mv-row{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg-card);border-radius:8px;margin-bottom:5px;border:1px solid var(--border);}',
+      '.ispk-mv-row.done{border-color:#22c55e40;background:rgba(34,197,94,0.06);}',
+      '.ispk-mv-row.skipped{border-color:#f59e0b40;background:rgba(245,158,11,0.05);opacity:.75;}',
+      '.ispk-mv-row.urgent{border-color:#ef4444;background:rgba(239,68,68,0.08);}',
+      '.ispk-mv-row.late{border-color:#dc2626;background:rgba(220,38,38,0.10);}',
+      '.ispk-mv-row.soon{border-color:#f59e0b;background:rgba(245,158,11,0.07);}',
+      '.ispk-mv-row.confirmed{border-color:#22c55e;background:rgba(34,197,94,0.10);}',
+      '.ispk-mv-vnum{font-family:var(--font-mono);font-weight:700;color:#a78bfa;font-size:12px;min-width:32px;}',
+      '.ispk-mv-when{flex:1;font-size:12px;color:var(--text);}',
+      '.ispk-mv-status{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;letter-spacing:.3px;}',
+      '.ispk-mv-btn{background:transparent;border:1px solid var(--border2);color:var(--text2);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;}',
+      '.ispk-mv-btn:hover{background:var(--bg-card2);}',
+      '.ispk-mv-bannert{display:inline-flex;align-items:center;gap:4px;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700;margin-left:6px;line-height:1.4;vertical-align:middle;letter-spacing:.3px;}',
+      '.ispk-mv-bannert.soon{background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid #f59e0b50;}',
+      '.ispk-mv-bannert.urgent{background:rgba(239,68,68,0.18);color:#ef4444;border:1px solid #ef444460;animation:inspk-blink-pulse 1.2s ease-in-out infinite;}',
+      '.ispk-mv-bannert.late{background:rgba(220,38,38,0.20);color:#dc2626;border:1px solid #dc262670;animation:inspk-blink-pulse 0.9s ease-in-out infinite;}'
+    ].join('\n');
+    document.head.appendChild(s);
+  }
+
+  // =========================== Mini-frise sur cartes PRIORITES ===========================
+  function colorForStatus(st){
+    switch(st){
+      case 'done':      return { bg:'#22c55e', ring:'#16a34a' };
+      case 'skipped':   return { bg:'#f59e0b', ring:'#d97706' };
+      case 'confirmed': return { bg:'#22c55e', ring:'#16a34a' };
+      case 'urgent':    return { bg:'#ef4444', ring:'#dc2626' };
+      case 'late':      return { bg:'#dc2626', ring:'#991b1b' };
+      case 'soon':      return { bg:'#f59e0b', ring:'#b45309' };
+      default:          return { bg:'#475569', ring:'#334155' };
+    }
+  }
+  function symbolForStatus(st){
+    if(st==='done') return '✓';
+    if(st==='skipped') return '−';
+    if(st==='confirmed') return '✓';
+    if(st==='urgent') return '!';
+    if(st==='late') return '!';
+    if(st==='soon') return '·';
+    return '';
+  }
+  function buildFriezeNode(plan){
+    var wrap = document.createElement('div');
+    wrap.className = 'ispk-mv-frieze';
+    wrap.setAttribute('data-mv-frieze','1');
+    plan.visits.forEach(function(v, idx){
+      if(idx>0){
+        var sep = document.createElement('span');
+        sep.className = 'ispk-mv-vsep' + (v.status==='done'||v.status==='skipped' ? ' done' : '');
+        wrap.appendChild(sep);
+      }
+      var pill = document.createElement('span');
+      pill.className = 'ispk-mv-vpill';
+      pill.title = 'V'+v.n+' — '+(v.done ? ('faite '+v.doneDate) : v.skipped ? 'sautée' : v.plannedDay ? ('jour: '+v.plannedDay) : v.expectedMonth ? ('mois: '+monthLabel(v.expectedMonth)) : '?');
+      var dot = document.createElement('span');
+      var col = colorForStatus(v.status);
+      dot.className = 'ispk-mv-vdot';
+      dot.style.background = col.bg;
+      dot.style.borderColor = col.ring;
+      dot.textContent = symbolForStatus(v.status) || ('V'+v.n).slice(1);
+      pill.appendChild(dot);
+      var lbl = document.createElement('span');
+      lbl.className = 'ispk-mv-vlabel';
+      if(v.done) lbl.textContent = 'V'+v.n+' ✓';
+      else if(v.skipped) lbl.textContent = 'V'+v.n+' MV';
+      else if(v.plannedDay){
+        var pd = parseISO(v.plannedDay);
+        lbl.textContent = 'V'+v.n+' '+(pd?dayLabel(pd):'');
+      }
+      else if(v.expectedMonth) lbl.textContent = 'V'+v.n+' '+monthLabel(v.expectedMonth);
+      else lbl.textContent = 'V'+v.n;
+      pill.appendChild(lbl);
+      wrap.appendChild(pill);
+    });
+    return wrap;
+  }
+
+  // Trouver les cartes PRIORITES — heuristique : div contenant à la fois un nom de site et le texte "Periode :"
+  function findPriorityCards(){
+    // Les cartes ont leur en-tête cliquable avec `borderLeft:4px solid <col>` etc.
+    // On cible : tout div ayant un descendant texte commençant par "Dernière visite :"
+    // ET pas déjà tagué.
+    var nodes = document.querySelectorAll('div');
+    var cards = [];
+    for(var i=0;i<nodes.length;i++){
+      var n = nodes[i];
+      if(n.__mvProcessed) continue;
+      // On veut le bloc-fiche : a un span avec texte "Dernière visite :" en descendant, et un h ou nom de site en début
+      var hasLast = false;
+      var labels = n.querySelectorAll('span,div');
+      for(var j=0;j<labels.length && !hasLast;j++){
+        var t = labels[j].textContent || '';
+        if(t.indexOf('Dernière visite :') === 0 || t.indexOf('Derniere visite :') === 0){
+          hasLast = true;
+        }
+      }
+      if(!hasLast) continue;
+      // Le bloc parent direct des cartes a un border-radius:14 et flexShrink — on prend la première occurrence par site
+      // Pour éviter d'attraper plusieurs niveaux imbriqués, on prend ceux qui ont un onClick (cursor:pointer dans header)
+      // Heuristique simple : on n'attrape que si on a un span avec width:8 height:8 borderRadius:50% (le bullet de la carte)
+      var bullet = n.querySelector('span[style*="border-radius: 50%"]') ||
+                   n.querySelector('span[style*="border-radius:50%"]');
+      if(!bullet) continue;
+      cards.push(n);
+    }
+    return cards;
+  }
+
+  function injectFriezeOnCards(){
+    var sites = loadSites();
+    if(!sites.length) return;
+    var byName = {};
+    sites.forEach(function(s){ if(s && s.name) byName[s.name] = s; });
+
+    var cards = findPriorityCards();
+    cards.forEach(function(card){
+      // Identifier le site via son nom (le span en gras 700 size 13)
+      var nameNode = null;
+      var spans = card.querySelectorAll('span');
+      for(var i=0;i<spans.length;i++){
+        var st = spans[i].style;
+        if(st && st.fontWeight === '700' && (st.fontSize === '13px' || st.fontSize === '13') && spans[i].textContent){
+          var txt = (spans[i].textContent||'').trim();
+          if(byName[txt]){ nameNode = spans[i]; break; }
+        }
+      }
+      if(!nameNode) return;
+      var site = byName[(nameNode.textContent||'').trim()];
+      var plan = computePlan(site);
+      if(!plan){ card.__mvProcessed = true; return; }
+
+      // Trouver le point d'insertion : juste avant la div des actions (qui contient typiquement les boutons "Planifier", "Modifier" etc.)
+      // Heuristique : c'est le div parent direct de "Dernière visite :" ou son frère suivant.
+      // On insère en bas de l'en-tête de carte (avant le bouton de statut).
+      // Plus simple : on injecte à la fin du <div style="flex:1, minWidth:0"> qui contient le nom.
+      var headerCol = nameNode.closest('div[style*="flex: 1"]');
+      if(!headerCol) headerCol = nameNode.parentElement && nameNode.parentElement.parentElement;
+      if(!headerCol) return;
+
+      // Vérifier qu'on n'a pas déjà injecté
+      var existing = headerCol.querySelector('.ispk-mv-frieze');
+      if(existing){
+        // Refresh : remplacer si plan a changé (compare via JSON)
+        var newJson = JSON.stringify(plan.visits.map(function(v){ return [v.n,v.status,v.plannedDay,v.doneDate]; }));
+        if(existing.__mvJson === newJson){ card.__mvProcessed = true; return; }
+        existing.parentNode.removeChild(existing);
+      }
+
+      var frieze = buildFriezeNode(plan);
+      frieze.__mvJson = JSON.stringify(plan.visits.map(function(v){ return [v.n,v.status,v.plannedDay,v.doneDate]; }));
+      headerCol.appendChild(frieze);
+
+      // Badge alerte à côté du nom (si une visite future est en urgent/late)
+      var alert = plan.visits.find(function(v){ return v.status==='urgent' || v.status==='late' || v.status==='soon'; });
+      // On supprime un éventuel badge précédent
+      var prevBadge = nameNode.parentElement && nameNode.parentElement.querySelector('.ispk-mv-bannert');
+      if(prevBadge) prevBadge.parentNode.removeChild(prevBadge);
+      if(alert){
+        var badge = document.createElement('span');
+        badge.className = 'ispk-mv-bannert ' + alert.status;
+        var labelMap = { urgent:'Confirmer V'+alert.n, late:'Retard V'+alert.n, soon:'Prévoir V'+alert.n };
+        badge.textContent = labelMap[alert.status] || ('V'+alert.n);
+        nameNode.parentElement.insertBefore(badge, nameNode.nextSibling);
+      }
+
+      card.__mvProcessed = true;
+    });
+
+    // Reset le tag après quelques cycles pour permettre les refresh si l'utilisateur déplie/replie
+    setTimeout(function(){
+      cards.forEach(function(c){ c.__mvProcessed = false; });
+    }, POLL_MS - 200);
+  }
+
+  // =========================== Section dans la fiche modale ===========================
+  function injectSectionInFiche(){
+    var site = null;
+    try{ site = window.__inspk_active_site || null; }catch(_){}
+    if(!site) return;
+
+    // Recharger la version fraîche depuis le store (window.__inspk_active_site est posé à l'ouverture)
+    var fresh = findSite(site.id);
+    if(fresh) site = fresh;
+
+    var plan = computePlan(site);
+    if(!plan) return;
+
+    // Trouver la modale ouverte : div fixed avec z-index 250
+    var modal = document.querySelector('div[style*="z-index: 250"]') ||
+                document.querySelector('div[style*="z-index:250"]');
+    if(!modal) return;
+
+    // Trouver la section "DATES PLANIFIEES" comme repère pour insérer NOTRE section juste après
+    var anchorBlock = null;
+    var blocks = modal.querySelectorAll('div');
+    for(var i=0;i<blocks.length;i++){
+      var t = (blocks[i].textContent||'').trim();
+      // Le titre de la section "DATES PLANIFIEES" est un div directement
+      if(t === 'DATES PLANIFIEES'){
+        // Le bloc parent qui a le borderLeft (la section) est l'ancêtre
+        var p = blocks[i];
+        while(p && p !== modal){
+          var sty = (p.getAttribute && p.getAttribute('style')) || '';
+          if((sty.indexOf('border-left: 3px solid')>=0 || sty.indexOf('border-left:3px solid')>=0) &&
+             sty.indexOf('22c55e')>=0){ anchorBlock = p; break; }
+          p = p.parentElement;
+        }
+        if(anchorBlock) break;
+      }
+    }
+    if(!anchorBlock) return;
+
+    // Vérifier si déjà injectée
+    var existing = modal.querySelector('.ispk-mv-section');
+    var newJson = JSON.stringify(plan.visits.map(function(v){ return [v.n,v.status,v.plannedDay,v.doneDate,v.expectedMonth?v.expectedMonth.toISOString().slice(0,7):null]; }));
+    if(existing && existing.__mvJson === newJson) return;
+    if(existing) existing.parentNode.removeChild(existing);
+
+    var section = document.createElement('div');
+    section.className = 'ispk-mv-section';
+    section.__mvJson = newJson;
+
+    var title = document.createElement('div');
+    title.className = 'ispk-mv-sec-title';
+    var titleL = document.createElement('span');
+    titleL.textContent = '🔁 VISITES PRÉVISIONNELLES';
+    title.appendChild(titleL);
+    var titleR = document.createElement('span');
+    titleR.style.cssText = 'color:var(--text3);font-size:9px;font-weight:600;letter-spacing:.3px;';
+    titleR.textContent = plan.vpy+'×/an · réf. 15 du mois';
+    title.appendChild(titleR);
+    section.appendChild(title);
+
+    plan.visits.forEach(function(v){
+      var row = document.createElement('div');
+      row.className = 'ispk-mv-row ' + (v.status || '');
+
+      var num = document.createElement('span');
+      num.className = 'ispk-mv-vnum';
+      num.textContent = 'V'+v.n;
+      row.appendChild(num);
+
+      var when = document.createElement('span');
+      when.className = 'ispk-mv-when';
+      if(v.done){
+        when.textContent = 'Faite le '+formatFr(v.doneDate);
+      } else if(v.skipped){
+        when.textContent = 'Sautée (MV)';
+      } else if(v.plannedDay){
+        when.textContent = 'Le '+formatFr(v.plannedDay);
+      } else if(v.expectedMonth){
+        when.textContent = monthLabel(v.expectedMonth)+' (mois prévisionnel)';
+      } else {
+        when.textContent = '—';
+      }
+      row.appendChild(when);
+
+      var st = document.createElement('span');
+      st.className = 'ispk-mv-status';
+      var stCol = colorForStatus(v.status);
+      st.style.background = stCol.bg+'22';
+      st.style.color = stCol.bg;
+      st.style.border = '1px solid '+stCol.bg+'55';
+      var labels = { done:'fait', skipped:'MV', confirmed:'confirmé', urgent:'urgent', late:'retard', soon:'à prévoir', future:'à venir' };
+      st.textContent = labels[v.status] || v.status;
+      row.appendChild(st);
+
+      // Bouton "poser un jour" / "retirer le jour"
+      if(!v.done && !v.skipped){
+        var override = getOverride(site.id, v.n);
+        var btn = document.createElement('button');
+        btn.className = 'ispk-mv-btn';
+        btn.textContent = override ? '× jour' : 'Poser jour';
+        btn.title = override ? 'Retirer le jour posé pour cette visite' : 'Poser une date précise (au lieu du mois prévisionnel)';
+        btn.onclick = function(ev){
+          ev.stopPropagation();
+          if(override){
+            setOverride(site.id, v.n, null);
+            scheduleRefreshNow();
+            try{ window.__toast && window.__toast('Jour retiré pour V'+v.n, 'ok'); }catch(_){}
+            return;
+          }
+          // Demander une date — input date HTML5
+          var inp = document.createElement('input');
+          inp.type = 'date';
+          // Pré-remplir avec le 15 du mois prévisionnel
+          if(v.expectedMonth){
+            var pre = new Date(v.expectedMonth);
+            pre.setDate(15);
+            inp.value = isoDay(pre);
+          }
+          inp.style.cssText = 'position:absolute;opacity:0;pointer-events:auto;';
+          document.body.appendChild(inp);
+          inp.addEventListener('change', function(){
+            var val = inp.value;
+            if(val){
+              setOverride(site.id, v.n, val);
+              try{ window.__toast && window.__toast('V'+v.n+' posée le '+formatFr(val), 'ok'); }catch(_){}
+              scheduleRefreshNow();
+            }
+            inp.parentNode && inp.parentNode.removeChild(inp);
+          });
+          try{ inp.showPicker ? inp.showPicker() : inp.click(); }catch(_){ inp.click(); }
+        };
+        row.appendChild(btn);
+      }
+
+      section.appendChild(row);
+    });
+
+    var help = document.createElement('div');
+    help.style.cssText = 'color:var(--text3);font-size:10px;margin-top:8px;line-height:1.5;font-style:italic;';
+    help.textContent = 'Mois équirépartis depuis ' + formatFr(site.contractStart) + '. Recalés après chaque visite faite. Rappels J-28 (à prévoir) et J-7 (à confirmer) dans À FAIRE.';
+    section.appendChild(help);
+
+    // Insérer après le bloc des dates planifiées
+    if(anchorBlock.nextSibling){
+      anchorBlock.parentNode.insertBefore(section, anchorBlock.nextSibling);
+    } else {
+      anchorBlock.parentNode.appendChild(section);
+    }
+  }
+
+  function formatFr(iso){
+    if(!iso) return '';
+    var d = parseISO(iso);
+    if(!d) return iso;
+    return pad2(d.getDate())+'/'+pad2(d.getMonth()+1)+'/'+String(d.getFullYear()).slice(2);
+  }
+
+  // =========================== Génération items À FAIRE ===========================
+  function loadTodos(){
+    try{ var r = localStorage.getItem(TODOS_KEY); if(!r) return []; var a = JSON.parse(r); return Array.isArray(a)?a:[]; }catch(e){ return []; }
+  }
+  function saveTodos(arr){
+    try{
+      localStorage.setItem(TODOS_KEY, JSON.stringify(arr));
+      localStorage.setItem('ispk-todos-mtime', String(Date.now()));
+    }catch(e){}
+    try{
+      if(window.__inspkTodoPushTimer) clearTimeout(window.__inspkTodoPushTimer);
+      window.__inspkTodoPushTimer = setTimeout(function(){
+        try{ if(typeof window.__inspk_push_cloud === 'function') window.__inspk_push_cloud(); }catch(_){}
+      }, 1000);
+    }catch(_){}
+  }
+  function syncMultivisitTodos(){
+    var sites = loadSites();
+    if(!sites.length) return;
+    var todos = loadTodos();
+    var today = startOfDay(new Date());
+
+    // Map des items multivisit existants par id : 'mv-<siteId>-V<n>-<early|late>'
+    var existingMap = {};
+    todos.forEach(function(t){
+      if(t && t.kind === 'multivisit' && t.id) existingMap[t.id] = t;
+    });
+
+    var desired = {};
+
+    sites.forEach(function(s){
+      var plan = computePlan(s);
+      if(!plan) return;
+      plan.visits.forEach(function(v){
+        if(v.done || v.skipped) return;
+        // Référence J0 = plannedDay si posé, sinon 15 du mois prévisionnel
+        var ref;
+        if(v.plannedDay){ ref = parseISO(v.plannedDay); }
+        else if(v.expectedMonth){
+          ref = new Date(v.expectedMonth.getFullYear(), v.expectedMonth.getMonth(), REF_DAY_OF_MONTH);
+        }
+        if(!ref) return;
+
+        var earlyDate = new Date(ref); earlyDate.setDate(earlyDate.getDate() - REMIND_EARLY_DAYS);
+        var lateDate  = new Date(ref); lateDate.setDate(lateDate.getDate()  - REMIND_LATE_DAYS);
+
+        // Item early : créé seulement à partir de J-28 (today >= earlyDate)
+        // et tant que la visite n'est pas faite. Disparaît dès que la visite est faite.
+        if(today >= earlyDate && !v.plannedDay){
+          // À prévoir (orange) — n'a pas de sens si plannedDay déjà posé (alors urgent prend le relais)
+          var earlyId = 'mv-'+s.id+'-V'+v.n+'-early';
+          desired[earlyId] = {
+            id: earlyId,
+            kind: 'multivisit',
+            mvKind: 'early',
+            mvSiteId: s.id,
+            mvVisit: v.n,
+            title: 'Prévoir V'+v.n+' — '+(s.name||''),
+            description: 'Visite prévue '+(v.expectedMonth?monthLabel(v.expectedMonth):'')+' · poser un jour quand le client confirme',
+            due: isoDay(ref),
+            done: false,
+            createdAt: existingMap[earlyId] ? existingMap[earlyId].createdAt : new Date().toISOString()
+          };
+        }
+
+        if(today >= lateDate){
+          var lateId = 'mv-'+s.id+'-V'+v.n+'-late';
+          desired[lateId] = {
+            id: lateId,
+            kind: 'multivisit',
+            mvKind: 'late',
+            mvSiteId: s.id,
+            mvVisit: v.n,
+            title: 'Confirmer V'+v.n+' — '+(s.name||''),
+            description: v.plannedDay ? ('Posée le '+formatFr(v.plannedDay)+' — confirmer le RDV') : ('Mois prévu : '+(v.expectedMonth?monthLabel(v.expectedMonth):'')+' — poser un jour ferme'),
+            due: isoDay(ref),
+            done: false,
+            createdAt: existingMap[lateId] ? existingMap[lateId].createdAt : new Date().toISOString()
+          };
+        }
+      });
+    });
+
+    // Reconstruire la liste : conserver tous les non-multivisit, et fusionner desired avec existant pour multivisit
+    var newTodos = todos.filter(function(t){ return !(t && t.kind === 'multivisit'); });
+    Object.keys(desired).forEach(function(id){
+      var ex = existingMap[id];
+      var d = desired[id];
+      if(ex){
+        // Conserver done/createdAt utilisateur si déjà cochés
+        newTodos.push(Object.assign({}, ex, d, { done: ex.done }));
+      } else {
+        newTodos.push(d);
+      }
+    });
+
+    // Comparer JSON pour éviter d'écrire si rien n'a changé
+    var oldJson = JSON.stringify(todos.filter(function(t){ return t&&t.kind==='multivisit'; }).map(function(t){ return [t.id,t.due,t.done,t.title]; }).sort());
+    var newJson = JSON.stringify(newTodos.filter(function(t){ return t&&t.kind==='multivisit'; }).map(function(t){ return [t.id,t.due,t.done,t.title]; }).sort());
+    if(oldJson === newJson) return;
+
+    saveTodos(newTodos);
+    try{ window.dispatchEvent(new CustomEvent('inspk-todos-pulled')); }catch(_){}
+  }
+
+  // =========================== Boucle ===========================
+  var pollTimer = null;
+  var todoTimer = null;
+  var pendingRefresh = false;
+  function refreshDom(){
+    pendingRefresh = false;
+    try{ injectFriezeOnCards(); }catch(_){}
+    try{ injectSectionInFiche(); }catch(_){}
+  }
+  function scheduleRefreshNow(){
+    if(pendingRefresh) return;
+    pendingRefresh = true;
+    setTimeout(refreshDom, 30);
+  }
+
+  function start(){
+    injectCss();
+    // Premier passage
+    refreshDom();
+    syncMultivisitTodos();
+    // Boucles
+    pollTimer = setInterval(refreshDom, POLL_MS);
+    todoTimer = setInterval(syncMultivisitTodos, TODO_REFRESH_MS);
+    // Sync À FAIRE aussi au focus (au cas où on revient sur l'app après un long moment)
+    window.addEventListener('focus', function(){ setTimeout(syncMultivisitTodos, 500); });
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState==='visible') setTimeout(syncMultivisitTodos, 500);
+    });
+    // Si une visite est marquée faite, le store change → on rafraichit vite
+    window.addEventListener('storage', function(e){
+      if(e && (e.key === ALL_KEY || e.key === LS_OVERRIDES)){
+        scheduleRefreshNow();
+        setTimeout(syncMultivisitTodos, 300);
+      }
+    });
+  }
+
+  // Démarrage différé pour laisser le bundle React monter
+  if(document.readyState === 'complete' || document.readyState === 'interactive'){
+    setTimeout(start, 1500);
+  } else {
+    window.addEventListener('DOMContentLoaded', function(){ setTimeout(start, 1500); });
+  }
+})();
+
+</script>
+</body></html>

@@ -1496,9 +1496,9 @@ function getFilteredTodos(){
     var keep = false;
     if(currentFilter === 'all') keep = true;
     else if(currentFilter === 'done') keep = !!t.done;
-    else if(currentFilter === 'pending') keep = !t.done && !lateState(t, now).urgent;
+    else if(currentFilter === 'pending') keep = !t.done && !lateState(t, now).urgent && !(t.kind==='multivisit' && t.mvKind==='late');
     else if(currentFilter === 'late'){
-      if(!t.done && lateState(t, now).urgent) keep = true;
+      if(!t.done && (lateState(t, now).urgent || (t.kind==='multivisit' && t.mvKind==='late'))) keep = true;
     }
     else if(currentFilter === 'today'){
       if(!t.done && t.due){
@@ -1845,7 +1845,7 @@ function buildHeader(){
   var now = new Date();
   for(var i=0;i<todos.length;i++){
     if(todos[i].done){ doneCount++; continue; }
-    if(lateState(todos[i], now).urgent) lateCountVal++;
+    if(lateState(todos[i], now).urgent || (todos[i].kind==='multivisit' && todos[i].mvKind==='late')) lateCountVal++;
   }
   pendingCount = pendingCount - lateCountVal;
 
@@ -2771,7 +2771,7 @@ function updateHomeTodoCounters(){
     for(var i=0;i<todos.length;i++){
       var t = todos[i];
       if(t.done) continue;
-      if(lateState(t, now).urgent) late++; else pending++;
+      if(lateState(t, now).urgent || (t.kind==='multivisit' && t.mvKind==='late')) late++; else pending++;
     }
     var sig = pending+'|'+late;
     if(existing && existing._sig === sig) return;

@@ -4389,6 +4389,10 @@ if(document.readyState === 'loading'){
       .filter(function(e){ return e && typeof e==='object' && e.clientStatus==='confirmed'; })
       .map(function(e){ return e.date; });
     var mainConfirmed = (site.clientStatus==='confirmed' && planned) ? planned : null;
+    var extrasProposed = (site.extraPlanned||[])
+      .filter(function(e){ return e && typeof e==='object' && e.clientStatus==='proposed'; })
+      .map(function(e){ return e.date; });
+    var mainProposed = (site.clientStatus==='proposed' && planned) ? planned : null;
     var overrides = loadOverrides()[site.id] || {};
 
     // Visites réalisées : associer chaque visite passée à un numéro
@@ -4474,6 +4478,8 @@ if(document.readyState === 'loading'){
       var daysToRef = Math.round((startOfDay(refDay) - today) / (1000*60*60*24));
 
       var isConfirmed = !!(dayIso && (extrasConfirmed.indexOf(dayIso)>=0 || dayIso===mainConfirmed));
+      var isProposed = !!(dayIso && (extrasProposed.indexOf(dayIso)>=0 || dayIso===mainProposed));
+      info.handled = isConfirmed || isProposed;
       if(isConfirmed){ info.status = 'confirmed'; }
       else if(daysToRef < -3){ info.status = 'late'; }   // retard sérieux : +3j après la référence
       else if(daysToRef <= REMIND_LATE_DAYS){ info.status = 'urgent'; }   // ≤ 7j
@@ -4904,7 +4910,7 @@ if(document.readyState === 'loading'){
           };
         }
 
-        if(today >= lateDate){
+        if(today >= lateDate && !v.handled){
           var lateId = 'mv-'+s.id+'-V'+v.n+'-late';
           desired[lateId] = {
             id: lateId,
@@ -4938,8 +4944,8 @@ if(document.readyState === 'loading'){
     });
 
     // Comparer JSON pour éviter d'écrire si rien n'a changé
-    var oldJson = JSON.stringify(todos.filter(function(t){ return t&&t.kind==='multivisit'; }).map(function(t){ return [t.id,t.due,t.done,t.title]; }).sort());
-    var newJson = JSON.stringify(newTodos.filter(function(t){ return t&&t.kind==='multivisit'; }).map(function(t){ return [t.id,t.due,t.done,t.title]; }).sort());
+    var oldJson = JSON.stringify(todos.filter(function(t){ return t&&t.kind==='multivisit'; }).map(function(t){ return [t.id,t.due,t.done,t.title,t.siteNum||'',t.description||'']; }).sort());
+    var newJson = JSON.stringify(newTodos.filter(function(t){ return t&&t.kind==='multivisit'; }).map(function(t){ return [t.id,t.due,t.done,t.title,t.siteNum||'',t.description||'']; }).sort());
     if(oldJson === newJson) return;
 
     saveTodos(newTodos);

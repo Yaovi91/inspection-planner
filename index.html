@@ -4479,7 +4479,7 @@ if(document.readyState === 'loading'){
 
       var isConfirmed = !!(dayIso && (extrasConfirmed.indexOf(dayIso)>=0 || dayIso===mainConfirmed));
       var isProposed = !!(dayIso && (extrasProposed.indexOf(dayIso)>=0 || dayIso===mainProposed));
-      info.handled = isConfirmed || isProposed;
+      info.handled = isConfirmed;
       if(isConfirmed){ info.status = 'confirmed'; }
       else if(daysToRef < -3){ info.status = 'late'; }   // retard sérieux : +3j après la référence
       else if(daysToRef <= REMIND_LATE_DAYS){ info.status = 'urgent'; }   // ≤ 7j
@@ -4876,6 +4876,28 @@ if(document.readyState === 'loading'){
       if(s.refusalDelay && s.refusalDelay > 0) return;
       var plan = computePlan(s);
       if(!plan) return;
+      // Override : si le site OU l'une de ses interventions a clientStatus confirmed/proposed
+      // avec date posée, la 1ère visite future non-réalisée/non-skipped est couverte.
+      // - confirmed : plannedDay + handled (Prévoir + Confirmer skip)
+      // - proposed  : plannedDay seul (Prévoir skip ; Confirmer reste pour relancer le client)
+      var __extraStatus = [];
+      if((s.clientStatus==='confirmed'||s.clientStatus==='proposed') && s.planned){
+        __extraStatus.push({cs:s.clientStatus, planned:s.planned});
+      }
+      (s.interventions||[]).forEach(function(iv){
+        if(iv && (iv.clientStatus==='confirmed'||iv.clientStatus==='proposed') && iv.planned){
+          __extraStatus.push({cs:iv.clientStatus, planned:iv.planned});
+        }
+      });
+      __extraStatus.forEach(function(st){
+        for(var __i=0; __i<plan.visits.length; __i++){
+          var __v = plan.visits[__i];
+          if(__v.done || __v.skipped) continue;
+          if(!__v.plannedDay) __v.plannedDay = st.planned;
+          if(st.cs === 'confirmed') __v.handled = true;
+          break;
+        }
+      });
       plan.visits.forEach(function(v){
         if(v.done || v.skipped) return;
         // Référence J0 = plannedDay si posé, sinon 15 du mois prévisionnel

@@ -1465,6 +1465,40 @@ window.INSPK_TODO = {
     }
     saveTodos(todos);
     refresh();
+  },
+  setReportPhase: function(id, phase){
+    // Pipeline rapport : 0=à rédiger, 1=rédaction en cours, 2=relecture (=prêt admin),
+    // 3=transmis admin, 4=envoyé client (sort de la barre).
+    phase = Math.max(0, Math.min(4, phase|0));
+    for(var i=0;i<todos.length;i++){
+      if(todos[i].id===id){
+        var t = todos[i];
+        var merged = {};
+        for(var k in t) merged[k] = t[k];
+        merged.reportPhase = phase;
+        // Synchroniser les sous-tâches admin/client (compat q1ReportState + escalade)
+        var adminDone = phase >= 3;
+        var clientDone = phase >= 4;
+        var subs = [];
+        var hasAdmin=false, hasClient=false;
+        for(var j=0;j<(t.subtasks||[]).length;j++){
+          var sub = t.subtasks[j];
+          if(sub.id==='admin'){ hasAdmin=true; sub = {id:'admin', label:sub.label, done:adminDone, doneAt: adminDone ? new Date().toISOString() : null}; }
+          else if(sub.id==='client'){ hasClient=true; sub = {id:'client', label:sub.label, done:clientDone, doneAt: clientDone ? new Date().toISOString() : null}; }
+          subs.push(sub);
+        }
+        if(!hasAdmin) subs.unshift({id:'admin', label:'① Transmis au service administratif', done:adminDone, doneAt: adminDone? new Date().toISOString():null});
+        if(!hasClient) subs.push({id:'client', label:'② Envoyé au client', done:clientDone, doneAt: clientDone? new Date().toISOString():null});
+        merged.subtasks = subs;
+        // Envoyé client = rapport terminé → quitte la barre de suivi
+        merged.done = clientDone;
+        merged.doneAt = clientDone ? new Date().toISOString() : null;
+        todos[i] = merged;
+        break;
+      }
+    }
+    saveTodos(todos);
+    refresh();
   }
 };
 
@@ -1529,7 +1563,7 @@ function ensureQ1Items(){
         if(visitDate.getTime() < installDate.getTime()) continue;
         
         // Borne haute: visite future = pas encore d'item
-        if(daysBetween(visitDate, now) < 8) continue;
+        if(daysBetween(visitDate, now) < 0) continue;
         
         var itemId = 'q1-'+site.id+'-'+visitStr;
         var existing = null;
@@ -1550,6 +1584,10 @@ function ensureQ1Items(){
             due: dueDate.getFullYear()+'-'+pad2(dueDate.getMonth()+1)+'-'+pad2(dueDate.getDate()),
             visitDate: visitStr,
             siteId: site.id,
+            mvSiteId: site.id,
+            siteNum: site.siteNum || '',
+            siteName: siteDisplayName(site),
+            reportPhase: 0,
             recurrence: 'none',
             subtasks: [
               {id:'admin', label:'① Transmis au service administratif', done:false},
@@ -5136,5 +5174,255 @@ if(document.readyState === 'loading'){
   }
 })();
 
+</script>
+
+<script>
+/* =====================================================================
+   INSP PLANNER — Barre de suivi des rapports (page d'accueil)
+   ---------------------------------------------------------------------
+   Affiche, sur l'écran d'accueil uniquement, une barre repliable
+   listant tous les rapports d'intervention en cours (intervention faite,
+   pas encore "Envoyé client"). Pipeline cliquable à 5 états :
+     0 À rédiger → 1 Rédaction en cours → 2 En relecture
+     → 3 Transmis admin → 4 Envoyé client (= sort de la barre).
+   Seuils d'alerte (couleur/clignotement) repris de q1ReportState :
+     admin J+8 orange, J+15 rouge clignotant, ⛔ 3 sem ;
+     client J+25 puis ⛔ J+30.
+   Lecture/écriture via window.INSPK_TODO (clé ispk-todos). Zéro modif sites.
+   Attaché au <body> (hors React) — pattern containing-block établi.
+   ===================================================================== */
+(function(){
+  if(window.__inspkReportBarReady) return;
+  window.__inspkReportBarReady = true;
+
+  var PHASES = [
+    {k:0, short:'À rédiger',          color:'#94a3b8'},
+    {k:1, short:'Rédaction en cours', color:'#f59e0b'},
+    {k:2, short:'En relecture',       color:'#a78bfa'},
+    {k:3, short:'Transmis admin',     color:'#22d3ee'},
+    {k:4, short:'Envoyé client',      color:'#22c55e'}
+  ];
+  var open = false;       // barre dépliée ?
+  var lastSig = '';       // signature pour éviter re-render inutile
+  var POLL_MS = 1500;
+
+  function todos(){
+    try{ return (window.INSPK_TODO && window.INSPK_TODO.getAll()) || []; }catch(_){ return []; }
+  }
+  function parseISO(s){ if(!s) return null; var p=String(s).split('-'); if(p.length<3) return null; var d=new Date(+p[0],+p[1]-1,+p[2]); return isNaN(d)?null:d; }
+  function daysSince(d){ if(!d) return null; var a=new Date(); a.setHours(0,0,0,0); var b=new Date(d); b.setHours(0,0,0,0); return Math.round((a-b)/86400000); }
+  function fmt(d){ if(!d) return ''; return (''+d.getDate()).padStart(2,'0')+'/'+(''+(d.getMonth()+1)).padStart(2,'0')+'/'+d.getFullYear(); }
+
+  function phaseOf(t){
+    if(typeof t.reportPhase === 'number') return Math.max(0, Math.min(4, t.reportPhase|0));
+    // Compat ancienne donnée : déduire depuis les sous-tâches
+    var admin=false, client=false;
+    (t.subtasks||[]).forEach(function(s){ if(s.id==='admin')admin=s.done; if(s.id==='client')client=s.done; });
+    if(client) return 4; if(admin) return 3; return 0;
+  }
+
+  // État d'alerte (réplique q1ReportState côté barre)
+  function alertOf(t){
+    var vd = parseISO(t.visitDate);
+    var ds = daysSince(vd);
+    if(ds==null) return {color:'', blink:false, label:''};
+    var ph = phaseOf(t);
+    if(ph < 3){ // admin pas fait
+      if(ds < 8)  return {color:'', blink:false, label:'J+'+ds};
+      if(ds <=14) return {color:'#f59e0b', blink:false, label:'admin J+'+ds};
+      if(ds <=20) return {color:'#ef4444', blink:true,  label:'retard admin J+'+ds};
+      return {color:'#ef4444', blink:true, label:'⛔ admin J+'+ds};
+    }
+    if(ph < 4){ // admin fait, client pas fait
+      if(ds < 25) return {color:'#3b82f6', blink:false, label:'attente client J+'+ds};
+      if(ds < 30) return {color:'#3b82f6', blink:true,  label:'vérif client J+'+ds};
+      return {color:'#ef4444', blink:true, label:'⛔ client J+'+ds};
+    }
+    return {color:'', blink:false, label:''};
+  }
+
+  function activeReports(){
+    var out = todos().filter(function(t){
+      return t.kind==='q1report' && !t.rejected && phaseOf(t) < 4;
+    });
+    out.sort(function(a,b){
+      var da=daysSince(parseISO(a.visitDate)), db=daysSince(parseISO(b.visitDate));
+      return (db==null?-1:db) - (da==null?-1:da); // plus ancien (plus en retard) d'abord
+    });
+    return out;
+  }
+
+  function ensureBlink(){
+    if(document.getElementById('inspk-rbar-style')) return;
+    var st=document.createElement('style');
+    st.id='inspk-rbar-style';
+    st.textContent='@keyframes inspkRBarBlink{0%,100%{opacity:1}50%{opacity:.25}} .inspk-rbar-blink{animation:inspkRBarBlink 1s ease-in-out infinite}';
+    document.head.appendChild(st);
+  }
+
+  var root=null;
+  function buildRoot(){
+    root=document.createElement('div');
+    root.id='inspk-rbar';
+    root.style.cssText='position:fixed;left:0;right:0;top:0;z-index:40;display:none;'+
+      'pointer-events:none;font-family:inherit;';
+    document.body.appendChild(root);
+  }
+
+  function isHome(){
+    return (window.__inspkNavTab==null || window.__inspkNavTab==='home') && !window.__inspkNavFiche;
+  }
+
+  function setPhase(id, ph){
+    try{ window.INSPK_TODO.setReportPhase(id, ph); }catch(_){}
+    if(navigator.vibrate){ try{ navigator.vibrate(12); }catch(_){} }
+    setTimeout(render, 60);
+  }
+
+  function chip(label, color, bg, on){
+    var b=document.createElement('button');
+    b.textContent=label;
+    b.style.cssText='pointer-events:auto;border:1px solid '+color+';color:'+(on?'#0b1220':color)+';'+
+      'background:'+(on?color:'transparent')+';border-radius:999px;padding:4px 9px;font-size:10px;'+
+      'font-weight:800;cursor:pointer;white-space:nowrap;font-family:inherit;letter-spacing:.2px;';
+    return b;
+  }
+
+  function rowFor(t){
+    var ph = phaseOf(t);
+    var al = alertOf(t);
+    var vd = parseISO(t.visitDate);
+    var card=document.createElement('div');
+    card.style.cssText='pointer-events:auto;background:var(--bg-card,#0f172a);border:1px solid '+
+      (al.color||'var(--border,#1e293b)')+';border-radius:10px;padding:9px 11px;margin-bottom:8px;'+
+      (al.blink?'':'')+'';
+    if(al.blink) card.className='inspk-rbar-blink';
+
+    // ligne titre
+    var top=document.createElement('div');
+    top.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px;';
+    var name=document.createElement('span');
+    name.textContent = t.siteName || (t.title||'').replace('Rapport Q1 — ','');
+    name.style.cssText='font-size:13px;font-weight:800;color:var(--text,#e2e8f0);';
+    top.appendChild(name);
+
+    if(t.siteNum){
+      var num=document.createElement('button');
+      num.textContent='#'+t.siteNum;
+      num.title='Ouvrir la fiche';
+      num.style.cssText='pointer-events:auto;font-size:10px;font-family:var(--font-mono,monospace);color:#22d3ee;'+
+        'background:var(--bg-input,#0b1220);padding:1px 6px;border-radius:4px;border:1px solid var(--border,#1e293b);'+
+        'cursor:pointer;text-decoration:underline;font-weight:700;';
+      num.onclick=function(e){ e.stopPropagation(); if(window.__inspkOpenFicheById) window.__inspkOpenFicheById(t.mvSiteId||t.siteId); };
+      top.appendChild(num);
+    }
+    if(vd){
+      var dv=document.createElement('span');
+      dv.textContent='visite '+fmt(vd);
+      dv.style.cssText='font-size:10px;color:var(--text3,#64748b);font-family:var(--font-mono,monospace);';
+      top.appendChild(dv);
+    }
+    if(al.label){
+      var bg=document.createElement('span');
+      bg.textContent=al.label;
+      bg.style.cssText='margin-left:auto;font-size:10px;font-weight:800;padding:2px 7px;border-radius:4px;'+
+        'font-family:var(--font-mono,monospace);'+
+        (al.color?('background:'+al.color+';color:#0b1220;'):'background:var(--bg-input,#0b1220);color:var(--text2,#94a3b8);');
+      top.appendChild(bg);
+    }
+    card.appendChild(top);
+
+    // ligne pipeline (interrupteur multi-niveaux)
+    var pipe=document.createElement('div');
+    pipe.style.cssText='display:flex;gap:5px;flex-wrap:wrap;align-items:center;';
+    PHASES.forEach(function(p){
+      var done = ph >= p.k && p.k>0;       // étapes franchies
+      var cur  = ph === p.k;
+      var c = chip(p.short, p.color, null, cur||done);
+      if(done && !cur){ c.style.opacity='0.75'; }
+      c.onclick=function(e){ e.stopPropagation(); setPhase(t.id, p.k); };
+      pipe.appendChild(c);
+    });
+    card.appendChild(pipe);
+    return card;
+  }
+
+  function render(){
+    if(!root) buildRoot();
+    ensureBlink();
+    if(!isHome()){ root.style.display='none'; lastSig='hidden'; return; }
+    var list = activeReports();
+
+    // signature pour éviter re-render permanent
+    var sig = (open?'O':'C')+'|'+list.map(function(t){return t.id+':'+phaseOf(t);}).join(',');
+    if(sig===lastSig && root.style.display!=='none') return;
+    lastSig=sig;
+
+    root.style.display='block';
+    root.innerHTML='';
+
+    var wrap=document.createElement('div');
+    wrap.style.cssText='max-width:860px;margin:0 auto;padding:8px 10px 0;';
+
+    // total + nb en retard
+    var late = list.filter(function(t){ var a=alertOf(t); return a.color==='#ef4444'; }).length;
+
+    var bar=document.createElement('button');
+    bar.style.cssText='pointer-events:auto;width:100%;display:flex;align-items:center;gap:10px;'+
+      'background:var(--bg-card,#0f172a);border:1px solid '+(late?'#ef4444':'var(--border2,#334155)')+';'+
+      'border-radius:'+(open?'12px 12px 0 0':'12px')+';padding:10px 13px;cursor:pointer;'+
+      'font-family:inherit;box-shadow:0 6px 18px rgba(0,0,0,.35);';
+    bar.onclick=function(){ open=!open; lastSig=''; render(); };
+
+    var icon=document.createElement('span'); icon.textContent='📄'; icon.style.fontSize='15px';
+    var lbl=document.createElement('span');
+    lbl.textContent='Suivi des rapports';
+    lbl.style.cssText='font-size:13px;font-weight:800;color:var(--text,#e2e8f0);letter-spacing:.2px;';
+    var cnt=document.createElement('span');
+    cnt.textContent=list.length;
+    cnt.style.cssText='font-size:12px;font-weight:800;min-width:22px;text-align:center;padding:1px 7px;'+
+      'border-radius:999px;background:#3b82f6;color:#fff;';
+    bar.appendChild(icon); bar.appendChild(lbl); bar.appendChild(cnt);
+    if(late){
+      var lt=document.createElement('span');
+      lt.textContent='⚠ '+late;
+      lt.className='inspk-rbar-blink';
+      lt.style.cssText='font-size:12px;font-weight:800;padding:1px 7px;border-radius:999px;background:#ef4444;color:#fff;';
+      bar.appendChild(lt);
+    }
+    var car=document.createElement('span');
+    car.textContent=open?'▲':'▼';
+    car.style.cssText='margin-left:auto;font-size:11px;color:var(--text3,#64748b);';
+    bar.appendChild(car);
+
+    wrap.appendChild(bar);
+
+    if(open){
+      var panel=document.createElement('div');
+      panel.style.cssText='pointer-events:auto;background:var(--bg,#0b1220);border:1px solid var(--border2,#334155);'+
+        'border-top:none;border-radius:0 0 12px 12px;padding:10px 11px;max-height:62vh;overflow-y:auto;'+
+        'box-shadow:0 10px 24px rgba(0,0,0,.4);';
+      if(!list.length){
+        var em=document.createElement('div');
+        em.textContent='Aucun rapport en cours 🎉';
+        em.style.cssText='font-size:12px;color:var(--text2,#94a3b8);text-align:center;padding:14px;';
+        panel.appendChild(em);
+      } else {
+        list.forEach(function(t){ panel.appendChild(rowFor(t)); });
+      }
+      wrap.appendChild(panel);
+    }
+
+    root.appendChild(wrap);
+  }
+
+  function loop(){ try{ render(); }catch(_){}; setTimeout(loop, POLL_MS); }
+
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(loop, 1800); });
+  } else {
+    setTimeout(loop, 1800);
+  }
+})();
 </script>
 </body></html>

@@ -1571,6 +1571,11 @@ function ensureQ1Items(){
         for(var ti=0; ti<todos.length; ti++){
           if(todos[ti].id === itemId){ existing = todos[ti]; break; }
         }
+        if(existing){
+          var _ep = site.projectNum || Wp(site.ref).p || '';
+          if(_ep && existing.projectNum !== _ep) existing.projectNum = _ep;
+          if(!existing.siteNum && site.siteNum) existing.siteNum = site.siteNum;
+        }
         
         if(!existing){
           // Calculer due date = visite + 30 jours (limite légale R1)
@@ -1587,6 +1592,7 @@ function ensureQ1Items(){
             siteId: site.id,
             mvSiteId: site.id,
             siteNum: site.siteNum || '',
+            projectNum: site.projectNum || Wp(site.ref).p || '',
             siteName: siteDisplayName(site),
             reportPhase: 0,
             recurrence: 'none',
@@ -2392,6 +2398,14 @@ function buildTodoCard(t){
         padding:'0', flexShrink:'0', transition:'0.15s'
       }
     }, [isSelected ? '✓' : '']);
+  } else if(isQ1){
+    // Rapport Q1 : pas de coche globale, seules les sous-tâches ①/② pilotent l'avancement
+    checkbox = el('div', {
+      style: {
+        width:'24px', height:'24px', minWidth:'24px',
+        flexShrink:'0'
+      }
+    }, []);
   } else {
     // Case de coche standard (verte)
     checkbox = el('button', {
@@ -2523,6 +2537,7 @@ function buildTodoCard(t){
           }, [t.title]),
           stateBadge,
           t.siteNum ? el('button', { title:'Ouvrir la fiche', style:{ fontSize:'10px', fontFamily:'var(--font-mono)', color:'#22d3ee', background:'var(--bg-input)', padding:'1px 6px', borderRadius:'4px', border:'1px solid var(--border)', whiteSpace:'nowrap', cursor:'pointer', textDecoration:'underline', fontWeight:'700' }, onclick:function(e){ e.stopPropagation(); if(window.__inspkOpenFicheById) window.__inspkOpenFicheById(t.mvSiteId); } }, ['#'+t.siteNum]) : null,
+          t.projectNum ? el('button', { title:'Copier le n\u00b0 de projet', style:{ background:'transparent', border:'1px solid var(--border2)', color:'#a78bfa', cursor:'pointer', fontSize:'10px', padding:'1px 5px', borderRadius:'4px', fontFamily:'inherit', fontWeight:'700' }, onclick:function(e){ e.stopPropagation(); window.__inspkCopyText && window.__inspkCopyText(t.projectNum); } }, ['P'+t.projectNum]) : null,
           t.siteNum ? el('button', { title:'Copier le n\u00b0 de site', style:{ background:'transparent', border:'1px solid var(--border2)', color:'#38bdf8', cursor:'pointer', fontSize:'10px', padding:'1px 5px', borderRadius:'4px', fontFamily:'inherit', fontWeight:'700' }, onclick:function(e){ e.stopPropagation(); window.__inspkCopyText && window.__inspkCopyText(t.siteNum); } }, ['\u29c9 n\u00b0']) : null,
           t.siteName ? el('button', { title:'Copier le nom', style:{ background:'transparent', border:'1px solid var(--border2)', color:'#38bdf8', cursor:'pointer', fontSize:'10px', padding:'1px 5px', borderRadius:'4px', fontFamily:'inherit', fontWeight:'700' }, onclick:function(e){ e.stopPropagation(); window.__inspkCopyText && window.__inspkCopyText(t.siteName); } }, ['\u29c9 nom']) : null,
           isQ1 && !isRejected && !t.done && daysSinceVisit != null ? el('span', {
@@ -5316,6 +5331,16 @@ if(document.readyState === 'loading'){
         'cursor:pointer;text-decoration:underline;font-weight:700;';
       num.onclick=function(e){ e.stopPropagation(); if(window.__inspkOpenFicheById) window.__inspkOpenFicheById(t.mvSiteId||t.siteId); };
       top.appendChild(num);
+    }
+    if(t.projectNum){
+      var pnum=document.createElement('button');
+      pnum.textContent='P'+t.projectNum;
+      pnum.title='Copier le n\u00b0 de projet';
+      pnum.style.cssText='pointer-events:auto;font-size:10px;font-family:var(--font-mono,monospace);color:#a78bfa;'+
+        'background:var(--bg-input,#0b1220);padding:1px 6px;border-radius:4px;border:1px solid var(--border,#1e293b);'+
+        'cursor:pointer;font-weight:700;';
+      pnum.onclick=function(e){ e.stopPropagation(); if(window.__inspkCopyText) window.__inspkCopyText(t.projectNum); };
+      top.appendChild(pnum);
     }
     if(vd){
       var dv=document.createElement('span');

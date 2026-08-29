@@ -3172,7 +3172,9 @@ if(document.readyState === 'loading'){
       { action:'customize',  icon:'\u2699', label:'Personnaliser le thème' },
       { action:'reform',     icon:'\u270e', label:'Reformulation' },
       { action:'mailreply',  icon:'\u2709', label:'Réponse mail' },
-      { action:'crypto',     icon:'\u{1F512}', label:'Chiffrement cloud' }
+      { action:'crypto',     icon:'\u{1F512}', label:'Chiffrement cloud' },
+      { action:'diag',       icon:'\u{1FA7A}', label:'Diagnostic de configuration' },
+      { action:'help',       icon:'\u003F', label:'Aide' }
     ];
 
     var ov = document.createElement('div');
@@ -3238,6 +3240,14 @@ if(document.readyState === 'loading'){
           }
           if(it.action==='mailreply'){
             if(typeof window.__inspkOpenMailReply === 'function'){ window.__inspkOpenMailReply(); }
+            return;
+          }
+          if(it.action==='diag'){
+            if(typeof window.__inspkOpenDiag === 'function'){ window.__inspkOpenDiag(); }
+            return;
+          }
+          if(it.action==='help'){
+            if(typeof window.__inspkOpenHelp === 'function'){ window.__inspkOpenHelp(); }
             return;
           }
           if(it.action==='crypto'){
@@ -5500,6 +5510,498 @@ if(document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', function(){ setTimeout(waitAndRun, 2000); });
   } else {
     setTimeout(waitAndRun, 2000);
+  }
+})();
+</script>
+<script>
+/* INSPK_HELPDIAG - Diagnostic de configuration + Aide integree.
+   Module vanilla autonome (aucune dependance au bundle React minifie).
+   Expose window.__inspkOpenDiag et window.__inspkOpenHelp.
+   Monte aussi une pastille discrete sur l'onglet ACCUEIL. */
+(function(){
+  'use strict';
+
+  var POLL_MS = 1500;
+
+  /* ---------- utilitaires ---------- */
+
+  function ls(k){ try{ return localStorage.getItem(k); }catch(_){ return null; } }
+
+  function jparse(s){ try{ return JSON.parse(s); }catch(_){ return null; } }
+
+  function maskKey(k){
+    if(!k) return '(vide)';
+    var s = String(k);
+    if(s.length <= 8) return '****';
+    return s.slice(0,4) + '\u2026' + s.slice(-4);
+  }
+
+  function fmtDT(ms){
+    if(!ms) return '\u2014';
+    try{
+      return new Date(ms).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+    }catch(_){ return '\u2014'; }
+  }
+
+  function el(tag, css, txt){
+    var d = document.createElement(tag);
+    if(css) d.style.cssText = css;
+    if(txt != null) d.textContent = txt;
+    return d;
+  }
+
+  var COL = { ok:'#22c55e', warn:'#f59e0b', err:'#ef4444', info:'#60a5fa' };
+
+  /* ---------- coquille de modale commune ---------- */
+
+  function shell(title, subtitle){
+    var ov = el('div','position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,0.80);'+
+      '-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:flex;'+
+      'align-items:flex-end;justify-content:center;');
+    var box = el('div','background:var(--bg-card,#121418);border:1px solid var(--border,#333842);'+
+      'border-radius:20px 20px 0 0;width:100%;max-width:560px;padding:16px;'+
+      'padding-bottom:calc(26px + env(safe-area-inset-bottom,0px));max-height:92vh;'+
+      'overflow-y:auto;font-family:inherit;');
+    box.addEventListener('click', function(e){ e.stopPropagation(); });
+    ov.addEventListener('click', function(){ close(); });
+
+    box.appendChild(el('div','width:42px;height:5px;background:var(--border2,#454b57);'+
+      'border-radius:3px;margin:0 auto 14px;opacity:.7;'));
+
+    var head = el('div','display:flex;align-items:center;gap:8px;margin-bottom:4px;');
+    head.appendChild(el('span','font-size:15px;font-weight:800;color:var(--text,#f4f6fa);', title));
+    var x = el('button','margin-left:auto;background:none;border:none;color:var(--text2,#e9ebef);'+
+      'font-size:20px;line-height:1;cursor:pointer;padding:0 2px;font-family:inherit;','\u00d7');
+    x.addEventListener('click', close);
+    head.appendChild(x);
+    box.appendChild(head);
+
+    if(subtitle){
+      box.appendChild(el('div','font-size:11px;color:var(--text3,#d6dae0);margin-bottom:14px;'+
+        'line-height:1.5;', subtitle));
+    }
+
+    var body = el('div','');
+    box.appendChild(body);
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+
+    function close(){ try{ document.body.removeChild(ov); }catch(_){} }
+    return { overlay:ov, box:box, body:body, close:close };
+  }
+
+  /* ============================================================
+     B4 - DIAGNOSTIC DE CONFIGURATION
+     ============================================================ */
+
+  function diagRow(state, label, detail){
+    var c = COL[state] || COL.info;
+    var row = el('div','display:flex;gap:9px;align-items:flex-start;padding:9px 10px;'+
+      'background:var(--bg-base,#060708);border:1px solid var(--border,#333842);'+
+      'border-left:3px solid '+c+';border-radius:9px;margin-bottom:7px;');
+    var dot = el('span','width:9px;height:9px;border-radius:50%;background:'+c+';'+
+      'flex-shrink:0;margin-top:4px;');
+    var txt = el('div','flex:1;min-width:0;');
+    txt.appendChild(el('div','font-size:12px;font-weight:700;color:var(--text,#f4f6fa);', label));
+    if(detail){
+      txt.appendChild(el('div','font-size:11px;color:var(--text2,#e9ebef);margin-top:2px;'+
+        'line-height:1.45;word-break:break-word;', detail));
+    }
+    row.appendChild(dot);
+    row.appendChild(txt);
+    return row;
+  }
+
+  function localSites(){
+    var p = jparse(ls('ispk-all'));
+    if(p && Array.isArray(p.s)) return p.s;
+    return null;
+  }
+
+  function countPhotos(cb){
+    try{
+      if(!window.__ispkIDB){ cb(null); return; }
+      var done = false;
+      var t = setTimeout(function(){ if(!done){ done = true; cb(null); } }, 2500);
+      window.__ispkHydratePhotos(function(map){
+        if(done) return;
+        done = true; clearTimeout(t);
+        var n = 0;
+        try{
+          Object.keys(map || {}).forEach(function(k){
+            n += (map[k] && map[k].length) ? map[k].length : 0;
+          });
+        }catch(_){}
+        cb(n);
+      });
+    }catch(_){ cb(null); }
+  }
+
+  function runDiag(){
+    var m = shell('\u{1FA7A} Diagnostic de configuration',
+      'Lecture de la configuration de l\u2019application et test r\u00e9el du cloud. '+
+      'Aucune donn\u00e9e n\u2019est modifi\u00e9e par ce diagnostic.');
+
+    var out = el('div','');
+    m.body.appendChild(out);
+
+    var lines = [];   // pour le rapport texte
+    function add(state, label, detail){
+      out.appendChild(diagRow(state, label, detail));
+      lines.push('['+state.toUpperCase()+'] '+label+(detail?(' - '+detail):''));
+    }
+
+    /* 1 - contexte de page */
+    (function(){
+      var proto = location.protocol;
+      var standalone = false;
+      try{
+        standalone = !!(window.navigator.standalone ||
+          (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches));
+      }catch(_){}
+      var mode = standalone ? 'application install\u00e9e (PWA)' : 'navigateur';
+      if(proto === 'file:'){
+        add('err','Contexte de page',
+          'La page est ouverte depuis un fichier local. La sauvegarde cloud ne peut pas '+
+          'fonctionner. Ouvre l\u2019adresse officielle de l\u2019application.');
+      } else {
+        add('ok','Contexte de page', proto.replace(':','') + ' \u2014 ' + mode);
+      }
+    })();
+
+    /* 2 - donnees locales */
+    var sites = localSites();
+    (function(){
+      if(sites === null){
+        add('err','Donn\u00e9es locales',
+          'Aucune donn\u00e9e trouv\u00e9e sur cet appareil. Si c\u2019est un nouvel appareil, '+
+          'connecte le cloud pour les r\u00e9cup\u00e9rer.');
+        return;
+      }
+      var mt = parseInt(ls('ispk-all-mtime') || '0') || 0;
+      add(sites.length ? 'ok' : 'warn','Donn\u00e9es locales',
+        sites.length + ' site' + (sites.length>1?'s':'') +
+        ' \u2014 derni\u00e8re modification : ' + fmtDT(mt));
+    })();
+
+    /* 3 - cloud configure */
+    var cfg = jparse(ls('ispk-sync-cfg')) || {};
+    var hasCfg = !!(cfg.apiKey && cfg.binId);
+    (function(){
+      if(!hasCfg){
+        add('err','Sauvegarde cloud',
+          'Non configur\u00e9e. Menu \u22ef puis la configuration cloud : il faut une '+
+          'Master Key JSONBin et, si tu rejoins un espace existant, son Bin ID.');
+        return;
+      }
+      add('ok','Sauvegarde cloud',
+        'Configur\u00e9e \u2014 cl\u00e9 ' + maskKey(cfg.apiKey) + ' \u00b7 bin ' + maskKey(cfg.binId));
+    })();
+
+    /* 4 - derniere sync reussie */
+    (function(){
+      var lastRaw = ls('ispk-lastsync');
+      if(!lastRaw){
+        add('warn','Derni\u00e8re synchronisation','Jamais r\u00e9ussie sur cet appareil.');
+        return;
+      }
+      var d = new Date(lastRaw);
+      var ageH = (Date.now() - d.getTime()) / 3600000;
+      add(ageH < 24 ? 'ok' : 'warn','Derni\u00e8re synchronisation',
+        d.toLocaleString('fr-FR') + (ageH >= 24 ? ' \u2014 plus de 24 h' : ''));
+    })();
+
+    /* 5 - chiffrement */
+    (function(){
+      var pass = ls('ispk-crypto-pass');
+      add(pass ? 'ok' : 'info','Chiffrement des donn\u00e9es',
+        pass ? 'Actif sur cet appareil. Les autres appareils doivent utiliser le m\u00eame mot de passe.'
+             : 'Non activ\u00e9 sur cet appareil. Les donn\u00e9es sont stock\u00e9es en clair sur le cloud.');
+    })();
+
+    /* 6 - todos / catalogue */
+    (function(){
+      var td = jparse(ls('ispk-todos'));
+      var ct = jparse(ls('ispk-catalog'));
+      add('info','T\u00e2ches et catalogue',
+        (Array.isArray(td) ? td.length : 0) + ' t\u00e2che(s) \u00e0 faire \u00b7 ' +
+        (Array.isArray(ct) ? ct.length : 0) + ' phrase(s) au catalogue');
+    })();
+
+    /* 7 - photos IndexedDB (asynchrone) */
+    var photoSlot = el('div','');
+    out.appendChild(photoSlot);
+    countPhotos(function(n){
+      var r;
+      if(n === null){
+        r = diagRow('warn','Photos','Stockage photo illisible sur cet appareil.');
+        lines.push('[WARN] Photos - stockage illisible');
+      } else {
+        r = diagRow('ok','Photos', n + ' photo' + (n>1?'s':'') + ' stock\u00e9e(s) sur cet appareil.');
+        lines.push('[OK] Photos - ' + n);
+      }
+      photoSlot.appendChild(r);
+    });
+
+    /* 8/9/10 - test reseau reel + comparaison + garde-fous (asynchrone) */
+    var netSlot = el('div','');
+    out.appendChild(netSlot);
+
+    if(!hasCfg){
+      netSlot.appendChild(diagRow('warn','Test du cloud','Impossible : cloud non configur\u00e9.'));
+      lines.push('[WARN] Test du cloud - non configure');
+    } else {
+      netSlot.appendChild(diagRow('info','Test du cloud','Connexion en cours\u2026'));
+      var hdr = { };
+      if(String(cfg.apiKey).slice(0,4) === '$2a$'){ hdr['X-Master-Key'] = cfg.apiKey; }
+      else { hdr['X-Access-Key'] = cfg.apiKey; }
+
+      fetch('https://api.jsonbin.io/v3/b/' + cfg.binId + '/latest', { headers:hdr, mode:'cors' })
+        .then(function(r){
+          if(!r.ok){ throw new Error('HTTP ' + r.status); }
+          return r.json();
+        })
+        .then(function(j){
+          return window.__ispkMaybeDecrypt ? window.__ispkMaybeDecrypt(j && j.record) : (j && j.record);
+        })
+        .then(function(data){
+          netSlot.innerHTML = '';
+          function addNet(state, label, detail){
+            netSlot.appendChild(diagRow(state, label, detail));
+            lines.push('['+state.toUpperCase()+'] '+label+(detail?(' - '+detail):''));
+          }
+          var cloudSites = (data && Array.isArray(data.sites)) ? data.sites : null;
+          if(cloudSites === null){
+            addNet('err','Test du cloud','Le cloud a r\u00e9pondu mais ne contient pas de sites lisibles.');
+            return;
+          }
+          addNet('ok','Test du cloud',
+            'R\u00e9ponse re\u00e7ue \u2014 ' + cloudSites.length + ' site(s) c\u00f4t\u00e9 cloud.');
+
+          /* comparaison + garde-fous */
+          var loc = sites ? sites.length : 0;
+          var clo = cloudSites.length;
+          var mt = parseInt(ls('ispk-all-mtime') || '0') || 0;
+          var blockers = [];
+          if(clo === 0 && loc > 0){
+            blockers.push('le cloud est vide alors que cet appareil a ' + loc +
+              ' site(s) : la r\u00e9cup\u00e9ration est bloqu\u00e9e pour ne pas tout effacer');
+          }
+          if(loc > 10 && clo < loc * 0.7){
+            blockers.push('le cloud contient nettement moins de sites que cet appareil (' +
+              clo + ' contre ' + loc + ') : la r\u00e9cup\u00e9ration est bloqu\u00e9e par s\u00e9curit\u00e9');
+          }
+          if(mt && (Date.now() - mt) < 30000){
+            blockers.push('une modification vient d\u2019\u00eatre faite sur cet appareil : ' +
+              'la r\u00e9cup\u00e9ration attend 30 secondes pour ne pas l\u2019\u00e9craser');
+          }
+          if(!blockers.length){
+            addNet('ok','\u00c9tat de la synchronisation',
+              'Rien ne bloque. Local ' + loc + ' site(s), cloud ' + clo + ' site(s).');
+          } else {
+            addNet('warn','\u00c9tat de la synchronisation',
+              'La synchronisation est actuellement retenue car ' + blockers.join(' ; ') + '.');
+          }
+        })
+        .catch(function(e){
+          netSlot.innerHTML = '';
+          var msg = (e && e.message) || 'erreur inconnue';
+          var detail;
+          if(msg === 'NO_PASS'){
+            detail = 'Les donn\u00e9es du cloud sont chiffr\u00e9es et le mot de passe n\u2019est pas '+
+              'configur\u00e9 sur cet appareil. Menu \u22ef puis Chiffrement cloud.';
+          } else if(msg === 'BAD_PASS'){
+            detail = 'Le mot de passe de chiffrement de cet appareil ne correspond pas \u00e0 celui '+
+              'utilis\u00e9 pour \u00e9crire les donn\u00e9es. Utilise exactement le m\u00eame sur tous les appareils.';
+          } else {
+            detail = 'Le cloud est injoignable (' + msg + '). V\u00e9rifie ta connexion, puis '+
+              'r\u00e9essaie. Si le probl\u00e8me persiste, c\u2019est probablement une panne du service.';
+          }
+          netSlot.appendChild(diagRow('err','Test du cloud', detail));
+          lines.push('[ERR] Test du cloud - ' + msg);
+        });
+    }
+
+    /* ---------- actions ---------- */
+    var actions = el('div','display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;');
+
+    var bCopy = el('button','flex:1;min-width:130px;background:rgba(99,102,241,0.15);'+
+      'border:1px solid rgba(99,102,241,0.45);color:#a5b4fc;border-radius:10px;padding:11px;'+
+      'font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;','\u29c9 Copier le rapport');
+    bCopy.addEventListener('click', function(){
+      var rep = 'DIAGNOSTIC INSP PLANNER \u2014 ' + new Date().toLocaleString('fr-FR') + '\n' +
+        lines.join('\n');
+      try{
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(rep);
+        } else if(window.__inspkFallbackCopy){
+          window.__inspkFallbackCopy(rep);
+        }
+        if(window.__act) window.__act('\u2713 Rapport copi\u00e9');
+      }catch(_){}
+    });
+    actions.appendChild(bCopy);
+
+    var bSync = el('button','flex:1;min-width:130px;background:rgba(34,197,94,0.15);'+
+      'border:1px solid rgba(34,197,94,0.45);color:#4ade80;border-radius:10px;padding:11px;'+
+      'font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;','\u2601 Forcer une sync');
+    bSync.addEventListener('click', function(){
+      if(typeof window.__inspk_push_cloud !== 'function'){
+        if(window.__toast) window.__toast('Sync indisponible', 'err');
+        return;
+      }
+      bSync.disabled = true;
+      bSync.textContent = '\u2601 Envoi en cours\u2026';
+      try{ window.__inspk_push_cloud(); }catch(_){}
+      setTimeout(function(){
+        bSync.disabled = false;
+        bSync.textContent = '\u2601 Forcer une sync';
+      }, 3000);
+    });
+    actions.appendChild(bSync);
+
+    m.body.appendChild(actions);
+
+    m.body.appendChild(el('div','font-size:10px;color:var(--text3,#d6dae0);margin-top:10px;'+
+      'line-height:1.5;text-align:center;',
+      'Le rapport copi\u00e9 ne contient aucune cl\u00e9 compl\u00e8te ni aucune donn\u00e9e client.'));
+  }
+
+  /* ============================================================
+     B3 - AIDE INTEGREE
+     ============================================================ */
+
+  var HELP = [
+    ['\u{1F680} Premier d\u00e9marrage',
+     'L\u2019application garde tes donn\u00e9es sur l\u2019appareil et les recopie sur un espace de '+
+     'sauvegarde en ligne. Pour l\u2019activer : menu \u22ef puis la configuration cloud. Colle la '+
+     'Master Key obtenue sur jsonbin.io. Laisse le Bin ID vide pour cr\u00e9er un nouvel espace, '+
+     'ou colle celui d\u2019un espace existant pour le rejoindre. Une fois connect\u00e9, tout est '+
+     'sauvegard\u00e9 automatiquement apr\u00e8s chaque modification.'],
+
+    ['\u{1F5D3} Planifier une intervention',
+     'Onglet Planning. Les interventions ne se posent que les lundis, mardis et jeudis. '+
+     'Touche un jour libre pour choisir un site, ou fais glisser une carte existante d\u2019un jour '+
+     '\u00e0 un autre. Le petit bouton en haut \u00e0 droite d\u2019une carte change le statut client : '+
+     'planifi\u00e9, propos\u00e9, confirm\u00e9. Le bouton d\u2019heure ajoute un horaire de rendez-vous.'],
+
+    ['\u2713 Enregistrer une visite faite',
+     'Sur la carte du site dans Priorit\u00e9s, ou dans la fiche du site, le bouton Visite faite '+
+     'enregistre la visite du jour et lib\u00e8re la date planifi\u00e9e. Le num\u00e9ro de visite '+
+     '(par exemple V2-4 : deuxi\u00e8me visite sur quatre) avance tout seul. Sur un site \u00e0 '+
+     'plusieurs visites par an, c\u2019est le m\u00eame site qui avance, pas un site en double.'],
+
+    ['\u{1F4C4} Le suivi des rapports',
+     'D\u00e8s qu\u2019une visite est enregistr\u00e9e, un rapport appara\u00eet dans la barre de suivi '+
+     'en haut de l\u2019accueil. Il passe par cinq \u00e9tapes : \u00e0 r\u00e9diger, r\u00e9daction en '+
+     'cours, en relecture, transmis \u00e0 l\u2019administration, envoy\u00e9 au client. La carte vire '+
+     'au orange puis au rouge clignotant si l\u2019envoi tra\u00eene. Un rapport envoy\u00e9 au client '+
+     'dispara\u00eet de la barre.'],
+
+    ['\u21bb Le rattrapage automatique',
+     'Au lancement, l\u2019application regarde les interventions dont la date planifi\u00e9e est '+
+     'd\u00e9pass\u00e9e et les enregistre comme faites, \u00e0 la date pr\u00e9vue. Cela \u00e9vite '+
+     'les oublis de saisie. Si une visite a \u00e9t\u00e9 report\u00e9e et non faite, corrige-la '+
+     'ensuite dans la fiche du site.'],
+
+    ['\u26a0 \u00ab \u00c7a ne se sauvegarde pas \u00bb',
+     'Dans la tr\u00e8s grande majorit\u00e9 des cas ce n\u2019est pas une panne : c\u2019est une '+
+     's\u00e9curit\u00e9 qui emp\u00eache d\u2019\u00e9craser tes donn\u00e9es. Ouvre le Diagnostic '+
+     'de configuration dans le menu \u22ef : il te dit en clair ce qui bloque et pourquoi.'],
+
+    ['\u{1F512} Ne jamais vider le cache',
+     'Sur iPhone, vider les donn\u00e9es de Safari efface la cl\u00e9 d\u2019acc\u00e8s stock\u00e9e '+
+     'par l\u2019application. Il faut alors tout reconfigurer \u00e0 la main. Ne le fais pas. '+
+     'Si un affichage semble fig\u00e9, ferme et rouvre l\u2019application, cela suffit.'],
+
+    ['\u{1F4F1} Travailler sur deux appareils',
+     'Les deux appareils doivent utiliser la m\u00eame Master Key, le m\u00eame Bin ID et, si le '+
+     'chiffrement est activ\u00e9, exactement le m\u00eame mot de passe. R\u00e8gle importante : '+
+     'ne laisse pas un appareil ouvert avec de vieilles donn\u00e9es pendant que tu corriges sur '+
+     'l\u2019autre \u2014 en se r\u00e9veillant il renverrait sa version p\u00e9rim\u00e9e. Ferme '+
+     'l\u2019application sur l\u2019appareil que tu n\u2019utilises pas.']
+  ];
+
+  function runHelp(){
+    var m = shell('Aide', 'Touche une rubrique pour l\u2019ouvrir.');
+    HELP.forEach(function(pair){
+      var wrap = el('div','margin-bottom:7px;border:1px solid var(--border,#333842);'+
+        'border-radius:10px;overflow:hidden;background:var(--bg-base,#060708);');
+      var head = el('button','width:100%;display:flex;align-items:center;gap:8px;'+
+        'background:transparent;border:none;padding:11px 12px;cursor:pointer;'+
+        'font-family:inherit;text-align:left;');
+      head.appendChild(el('span','font-size:12px;font-weight:700;color:var(--text,#f4f6fa);flex:1;',
+        pair[0]));
+      var car = el('span','font-size:11px;color:var(--text3,#d6dae0);','\u25be');
+      head.appendChild(car);
+
+      var body = el('div','display:none;padding:0 12px 12px;font-size:12px;line-height:1.6;'+
+        'color:var(--text2,#e9ebef);', pair[1]);
+
+      head.addEventListener('click', function(){
+        var open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : 'block';
+        car.textContent = open ? '\u25be' : '\u25b4';
+      });
+
+      wrap.appendChild(head);
+      wrap.appendChild(body);
+      m.body.appendChild(wrap);
+    });
+
+    var bDiag = el('button','width:100%;margin-top:10px;background:rgba(99,102,241,0.15);'+
+      'border:1px solid rgba(99,102,241,0.45);color:#a5b4fc;border-radius:10px;padding:11px;'+
+      'font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;',
+      '\u{1FA7A} Ouvrir le diagnostic de configuration');
+    bDiag.addEventListener('click', function(){ m.close(); runDiag(); });
+    m.body.appendChild(bDiag);
+  }
+
+  /* ============================================================
+     PASTILLE ACCUEIL
+     ============================================================ */
+
+  var pill = null;
+
+  function isHome(){
+    return (window.__inspkNavTab == null || window.__inspkNavTab === 'home') &&
+           !window.__inspkNavFiche;
+  }
+
+  function buildPill(){
+    pill = el('div','position:fixed;left:0;right:0;bottom:calc(10px + env(safe-area-inset-bottom,0px));'+
+      'z-index:38;display:none;justify-content:center;gap:8px;pointer-events:none;');
+
+    function mk(label, fn){
+      var b = el('button','pointer-events:auto;background:var(--bg-card,#121418);'+
+        'border:1px solid var(--border2,#454b57);color:var(--text2,#e9ebef);border-radius:999px;'+
+        'padding:7px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;'+
+        'box-shadow:0 4px 14px rgba(0,0,0,.35);', label);
+      b.addEventListener('click', fn);
+      return b;
+    }
+
+    pill.appendChild(mk('\u{1FA7A} Diagnostic', function(){ runDiag(); }));
+    pill.appendChild(mk('? Aide', function(){ runHelp(); }));
+    document.body.appendChild(pill);
+  }
+
+  function loop(){
+    try{
+      if(!pill) buildPill();
+      pill.style.display = isHome() ? 'flex' : 'none';
+    }catch(_){}
+    setTimeout(loop, POLL_MS);
+  }
+
+  /* ---------- exposition ---------- */
+  window.__inspkOpenDiag = runDiag;
+  window.__inspkOpenHelp = runHelp;
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(loop, 2000); });
+  } else {
+    setTimeout(loop, 2000);
   }
 })();
 </script>
